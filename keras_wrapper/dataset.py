@@ -1848,6 +1848,57 @@ class Dataset(object):
         tokenized = " ".join(tokenized)
         return tokenized
 
+    def tokenize_none_char_categorized(self, caption):
+        """
+        Character-level tokenization. Respects all symbols. Separates chars. Does not separate categorized tokens, e.g: "_NAME, _MAIL, _NUMBER"
+        Inserts <space> sybmol for spaces.
+        If found an escaped char, "&apos;" symbol, it is converted to the original one
+        # List of escaped chars (by moses tokenizer)
+        & ->  &amp;
+        | ->  &#124;
+        < ->  &lt;
+        > ->  &gt;
+        ' ->  &apos;
+        " ->  &quot;
+        [ ->  &#91;
+        ] ->  &#93;
+        :param caption: String to tokenize
+        :return: Tokenized version of caption
+        """
+
+        def convert_chars(x):
+            if x == ' ':
+                return '<space>'
+            else:
+                return x.encode('utf-8')
+
+        tokenized = re.sub('[\n\t]+', '', caption.strip())
+        tokenized = re.sub('&amp;', ' & ', tokenized)
+        tokenized = re.sub('&#124;', ' | ', tokenized)
+        tokenized = re.sub('&gt;', ' > ', tokenized)
+        tokenized = re.sub('&lt;', ' < ', tokenized)
+        tokenized = re.sub('&apos;', " ' ", tokenized)
+        tokenized = re.sub('&quot;', ' " ', tokenized)
+        tokenized = re.sub('&#91;', ' [ ', tokenized)
+        tokenized = re.sub('&#93;', ' ] ', tokenized)
+        tokenized = re.sub('[  ]+', ' ', tokenized)
+        
+        out = []
+        # We split using spaces to avoid categorical tokens to be separated.
+        sp = tokenized.split()
+        for ind,p in enumerate(sp):
+            # We add a space at the end of each word (except the last one) to recover the the spaces  smashed by the split()
+            if ind != len(sp)-1:
+                p = p+" "
+            # If the word is a categorical token we don't split it
+            if re.match('_[A-Z]+',p):
+                out.append(p)
+            else: # If not we separate by characters as usually
+                out += [convert_chars(x) for x in p.decode('utf-8')]
+
+        tokenized = " ".join(out)
+        return tokenized
+
     def detokenize_none_char(self,caption):
 	"""
 	Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by 
@@ -1865,13 +1916,7 @@ class Dataset(object):
         :return: Detokenized version of caption
 	"""
 	
-	def deconvert_chars(x):
-            if x == '<space>':
-                return ' '
-	    else:
-		return x.encode('utf-8')
-	
-	detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
+        detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
 	detokenized = re.sub(' \| ', ' &#124; ', detokenized)
 	detokenized = re.sub(' > ', ' &gt; ', detokenized)
 	detokenized = re.sub(' < ', ' &lt; ', detokenized)
@@ -1881,8 +1926,6 @@ class Dataset(object):
 	detokenized = re.sub( '\] ', ' &#93; ', detokenized)
         detokenized = re.sub( ' ', '', detokenized)
         detokenized = re.sub( '<space>', ' ', detokenized)
-	#detokenized = [deconvert_chars(char) for char in detokenized.decode('utf-8')]
-        #detokenized = "".join(detokenized)
 	return detokenized
 
     def tokenize_CNN_sentence(self, caption):
