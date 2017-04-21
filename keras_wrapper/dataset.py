@@ -100,6 +100,7 @@ class Data_Batch_Generator(object):
         self.net = net
         self.predict = predict
         self.temporally_linked = temporally_linked
+        
         self.first_idx = -1
         # Several parameters
         self.params = {'batch_size': batch_size,
@@ -109,7 +110,7 @@ class Data_Batch_Generator(object):
                        'num_iterations': num_iterations,
                        'random_samples': random_samples,
                        'shuffle': shuffle}
-
+        print "Normalization------------>", self.params['normalization']
     def generator(self):
         """
         Gets and processes the data
@@ -1936,42 +1937,6 @@ class Dataset(object):
         detokenized = re.sub('@@ ', '', str(caption).strip())
         return detokenized
 
-    def detokenize_none_char(self,caption):
-        """
-        Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by
-        the <space> token. If found an special character is converted to the escaped char.
-        # List of escaped chars (by moses tokenizer)
-            & ->  &amp;
-            | ->  &#124;
-            < ->  &lt;
-            > ->  &gt;
-            ' ->  &apos;
-            " ->  &quot;
-            [ ->  &#91;
-            ] ->  &#93;
-            :param caption: String to de-tokenize
-            :return: Detokenized version of caption
-        """
-
-        def deconvert_chars(x):
-            if x == '<space>':
-                return ' '
-            else:
-                return x.encode('utf-8')
-
-        detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
-        detokenized = re.sub(' \| ', ' &#124; ', detokenized)
-        detokenized = re.sub(' > ', ' &gt; ', detokenized)
-        detokenized = re.sub(' < ', ' &lt; ', detokenized)
-        detokenized = re.sub( "' ", ' &apos; ', detokenized)
-        detokenized = re.sub( '" ', ' &quot; ', detokenized)
-        detokenized = re.sub( '\[ ', ' &#91; ', detokenized)
-        detokenized = re.sub( '\] ', ' &#93; ', detokenized)
-        detokenized = re.sub( ' ', '', detokenized)
-        detokenized = re.sub( '<space>', ' ', detokenized)
-        return detokenized
->>>>>>> e974da3511e9c0b1cfde7eca5b750609420b6ecd
-
     def tokenize_CNN_sentence(self, caption):
         """
         Tokenization employed in the CNN_sentence package
@@ -2972,7 +2937,6 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = eval('self.X_' + set_name + '[id_in][init:final]')
-
             if not debug and not ghost_x:
                 if type_in == 'raw-image':
                     daRandomParams = None
@@ -2989,6 +2953,7 @@ class Dataset(object):
                                       fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
                                       words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
+                    #normalization = False; ## ARF project - DELETE ASAP
                     x = self.loadFeatures(x, self.features_lengths[id_in], normalization_type, normalization,
                                           data_augmentation=dataAugmentation)
                 elif type_in == 'video-features':
@@ -3211,6 +3176,7 @@ class Dataset(object):
                                       fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
                                       words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
+                    #normalization = False # ARF project - Remove ASAP
                     x = self.loadFeatures(x, self.features_lengths[id_in], normalization_type, normalization,
                                           data_augmentation=dataAugmentation)
                 elif type_in == 'video-features':
