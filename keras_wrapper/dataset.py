@@ -1605,102 +1605,52 @@ class Dataset(object):
         """
         vocab = vocabularies['words2idx']
         n_batch = len(X)
-        if max_len == 0:  # use whole sentence as class
-            X_out = np.zeros(n_batch).astype('int32')
-            for i in range(n_batch):
-                w = X[i]
-                if w in vocab:
-                    X_out[i] = vocab[w]
-                else:
-                    X_out[i] = vocab['<unk>']
-            if loading_X:
-                X_out = (X_out, None)  # This None simulates a mask
-        else:  # process text as a sequence of words
-            if pad_on_batch:
-                max_len_batch = min(max([len(x.split(' ')) for x in X]) + 1, max_len)
-                max_char_batch = min(max([len(p) for f in X for p in f.split(' ')]) , max_word_len)
+        if pad_on_batch:
+            max_len_batch = min(max([len(x.split(' ')) for x in X]) + 1, max_len)
+            max_char_batch = min(max([len(p) for f in X for p in f.split(' ')]) , max_word_len)
+        else:
+            max_len_batch = max_len
+            max_char_batch = max_word_len
+
+        # Add an extra dimension in the case we are working with characters
+        X_out = np.ones((n_batch, max_len_batch, max_char_batch)).astype('int32') * self.extra_words['<pad>']
+        X_mask = np.zeros((n_batch, max_len_batch, max_char_batch)).astype('int8')
+
+        if max_len_batch == max_len:
+            max_len_batch -= 1  # always leave space for <eos> symbol
+
+        # fills text vectors with each word (fills with 0s or removes remaining words w.r.t. max_len)
+        for i in range(n_batch):
+            x = X[i].strip().split(' ')
+            len_j = len(x)
+            if fill == 'start':
+                offset_j = max_len_batch - len_j - 1
+            elif fill == 'center':
+                offset_j = (max_len_batch - len_j) / 2
             else:
-                max_len_batch = max_len
-                max_char_batch = max_word_len
+                offset_j = 0
+                len_j = min(len_j, max_len_batch)
+            if offset_j < 0:
+                len_j = len_j + offset_j
+                offset_j = 0
 
-            if words_so_far:
-                X_out = np.ones((n_batch, max_len_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
-                X_mask = np.zeros((n_batch, max_len_batch, max_len_batch)).astype('int8')
-                null_row = np.ones((1, max_len_batch)).astype('int32') * self.extra_words['<pad>']
-                zero_row = np.zeros((1, max_len_batch)).astype('int8')
-                if offset > 0:
-                    null_row[0] = np.append([vocab['<null>']] * offset, null_row[0, :-offset])
-            else:
-                if max_word_len == 0:
-                    X_out = np.ones((n_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
-                    X_mask = np.zeros((n_batch, max_len_batch)).astype('int8')
-                else: # We add an extra dimension in the case we are working with characters 
-                    X_out = np.ones((n_batch, max_len_batch, max_word_len)).astype('int32') * self.extra_words['<pad>']
-                    X_mask = np.zeros((n_batch, max_len_batch, max_word_len)).astype('int8')
+            # If we are using character level encoding
+            for j, w in zip(range(len_j), x[:len_j]):
+                ch = np.ones(max_char_batch)*self.extra_words['<pad>']
+                w = w.decode('utf-8')
+                lw = list(w)
+                for h in range(max_char_batch-len(w)):  # Special case! When the word has less characters than expected.
+                    lw.append(0)
+                for idx, cha in zip(range(max_char_batch), list(w)):
+                    ch[idx] = vocab[cha]  # We assume that all the characters are in the vocabulary
+                X_out[i, j] = ch
+                X_mask[i, j] = np.ones(max_char_batch)  # fill mask
+            X_mask[i, len_j] = 1  # add additional 1 for the <eos> symbol
 
-            if max_len_batch == max_len:
-                max_len_batch -= 1  # always leave space for <eos> symbol
-            # fills text vectors with each word (fills with 0s or removes remaining words w.r.t. max_len)
-            for i in range(n_batch):
-                x = X[i].strip().split(' ')
-                len_j = len(x)
-                if fill == 'start':
-                    offset_j = max_len_batch - len_j - 1
-                elif fill == 'center':
-                    offset_j = (max_len_batch - len_j) / 2
-                else:
-                    offset_j = 0
-                    len_j = min(len_j, max_len_batch)
-                if offset_j < 0:
-                    len_j = len_j + offset_j
-                    offset_j = 0
-
-                if words_so_far:
-                    for j, w in zip(range(len_j), x[:len_j]):
-                        if w in vocab:
-                            next_w = vocab[w]
-                        else:
-                            next_w = vocab['<unk>']
-                        for k in range(j, len_j):
-                            X_out[i, k + offset_j, j + offset_j] = next_w
-                            X_mask[i, k + offset_j, j + offset_j] = 1  # fill mask
-                        X_mask[i, j + offset_j, j + 1 + offset_j] = 1  # add additional 1 for the <eos> symbol
-
-                else:
-                    if max_word_len == 0:
-                        for j, w in zip(range(len_j), x[:len_j]):
-                            if w in vocab:
-                                X_out[i, j + offset_j] = vocab[w]
-                            else:
-                                # print w, "not in vocab!"
-                                X_out[i, j + offset_j] = vocab['<unk>']
-                            X_mask[i, j + offset_j] = 1  # fill mask
-                        X_mask[i, len_j + offset_j] = 1  # add additional 1 for the <eos> symbol
-                    else: # If we are using character level encoding
-                        for j, w in zip(range(len_j), x[:len_j]):
-                            ch = np.ones(max_word_len)*self.extra_words['<pad>']
-                            w = w.decode('utf-8')
-                            lw = list(w)
-                            for h in range(max_word_len-len(w)): # Special case! When the word has less characters than max_word_len we have to fill.
-                                lw.append(0)
-                            for idx, charac in zip(range(max_word_len), list(w)):
-                                ch[idx] = vocab[charac] # We assume that all the characters are in the vocabulary
-                            X_out[i, j] = ch
-                            X_mask[i, j + offset_j] = 1  # fill mask
-                        X_mask[i, len_j + offset_j] = 1  # add additional 1 for the <eos> symbol
-                
-                    if offset > 0:  # Move the text to the right -> null symbol
-                       if words_so_far:
-                            for k in range(len_j):
-                                X_out[i, k] = np.append([vocab['<null>']] * offset, X_out[i, k, :-offset])
-                                X_mask[i, k] = np.append([0] * offset, X_mask[i, k, :-offset])
-                            X_out[i] = np.append(null_row, X_out[i, :-offset], axis=0)
-                            X_mask[i] = np.append(zero_row, X_mask[i, :-offset], axis=0)
-                        else:
-                            X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
-                            X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
-                           
-            X_out = (X_out, X_mask)
+            if offset > 0:  # Move the text to the right -> null symbol
+                X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
+                X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
+        X_out = (X_out, X_mask)
 
         return X_out
 
