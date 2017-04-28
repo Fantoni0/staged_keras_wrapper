@@ -421,6 +421,7 @@ class Dataset(object):
         self.extra_words = {'<pad>': 0, '<unk>': 1, '<null>': 2}  # extra words introduced in all vocabularies
         self.vocabulary = dict()  # vocabularies (words2idx and idx2words)
         self.max_text_len = dict()  # number of words accepted in a 'text' sample
+        self.max_word_len = dict(); # max length per word in a 'text' sample
         self.vocabulary_len = dict()  # number of words in the vocabulary
         self.text_offset = dict()  # number of timesteps that the text is shifted (to the right)
         self.fill_text = dict()  # text padding mode
@@ -610,7 +611,7 @@ class Dataset(object):
                  overwrite_split=False, normalization_types=None, data_augmentation_types=None,
                  img_size=[256, 256, 3], img_size_crop=[227, 227, 3], use_RGB=True,
                  # 'raw-image' / 'video'   (height, width, depth)
-                 max_text_len=35, tokenization='tokenize_basic', offset=0, fill='end', min_occ=0,  # 'text'
+                 max_text_len=35, max_word_len=0, tokenization='tokenize_basic', offset=0, fill='end', min_occ=0,  # 'text'
                  pad_on_batch=True, build_vocabulary=False, max_words=0, words_so_far=False,  # 'text'
                  feat_len=1024,  # 'image-features' / 'video-features'
                  max_video_len=26  # 'video'
@@ -643,6 +644,7 @@ class Dataset(object):
             :param tokenization: type of tokenization applied (must be declared as a method of this class) (only applicable when type=='text').
             :param build_vocabulary: whether a new vocabulary will be built from the loaded data or not (only applicable when type=='text'). A previously calculated vocabulary will be used if build_vocabulary is an 'id' from a previously loaded input/output
             :param max_text_len: maximum text length, the rest of the data will be padded with 0s (only applicable if the output data is of type 'text').
+            :param max_word_len: maximum lenght alowed per word. The rest of the data will be padded with 0s (only applicable if the output data is of type 'text').
             :param max_words: a maximum of 'max_words' words from the whole vocabulary will be chosen by number or occurrences
             :param offset: number of timesteps that the text is shifted to the right (for sequential conditional models, which take as input the previous output)
             :param fill: select whether padding before or after the sequence
@@ -685,7 +687,9 @@ class Dataset(object):
         elif type == 'text':
             if self.max_text_len.get(id) is None:
                 self.max_text_len[id] = dict()
-            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len,
+            if self.max_word_len.get(id) is None:
+                self.max_word_len[id] = dict();
+            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len,
                                        max_words, offset, fill, min_occ, pad_on_batch, words_so_far)
         elif type == 'image-features':
             data = self.preprocessFeatures(path_list, id, set_name, feat_len)
@@ -1096,7 +1100,7 @@ class Dataset(object):
     #       TYPE 'text' SPECIFIC FUNCTIONS
     # ------------------------------------------------------- #
 
-    def preprocessText(self, annotations_list, id, set_name, tokenization, build_vocabulary, max_text_len,
+    def preprocessText(self, annotations_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len,
                        max_words, offset, fill, min_occ, pad_on_batch, words_so_far):
         """
         Preprocess 'text' data type: Builds vocabulary (if necessary) and preprocesses the sentences.
@@ -1108,6 +1112,7 @@ class Dataset(object):
         :param tokenization: Tokenization to perform.
         :param build_vocabulary: Whether we should build a vocabulary for this text or not.
         :param max_text_len: Maximum length of the text. If max_text_len == 0, we treat the full sentence as a class.
+        :param max_word_len: Maximum length of each word of the text. Set to 0 to use whole words
         :param max_words: Maximum number of words to include in the dictionary.
         :param offset: Text shifting.
         :param fill: Whether we path with zeros at the beginning or at the end of the sentences.
@@ -1161,8 +1166,9 @@ class Dataset(object):
             raise Exception(
                 'The dataset must include a vocabulary with id "' + id + '" in order to process the type "text" data. Set "build_vocabulary" to True if you want to use the current data for building the vocabulary.')
 
-        # Store max text len
+        # Store max text len and max_word_len
         self.max_text_len[id][set_name] = max_text_len
+        self.max_word_len[id][set_name] = max_word_len
         self.text_offset[id] = offset
         self.fill_text[id] = fill
         self.pad_on_batch[id] = pad_on_batch
@@ -1491,7 +1497,6 @@ class Dataset(object):
     def loadText(self, X, vocabularies, max_len, offset, fill, pad_on_batch, words_so_far, loading_X=False):
         """
         Text encoder: Transforms samples from a text representation into a numerical one. It also masks the text.
-
         :param X: Text to encode.
         :param vocabularies: Mapping word -> index
         :param max_len: Maximum length of the text.
@@ -1579,6 +1584,122 @@ class Dataset(object):
                     else:
                         X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
                         X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
+            X_out = (X_out, X_mask)
+
+        return X_out
+
+    def loadTextCharacter(self, X, vocabularies, max_len, max_word_len, offset, fill, pad_on_batch, words_so_far, loading_X=False):
+        """
+        Text encoder: Transforms samples from a text representation into a numerical one. It also masks the text. Each word is represented by a different vector formed by the numerical index of the characters
+
+        :param X: Text to encode.
+        :param vocabularies: Mapping word -> index
+        :param max_len: Maximum length of the text.
+        :param max_word_len: maximum length of the words when using character NMT.
+        :param offset: Shifts the text to the right, adding null symbol at the start
+        :param fill: 'start': the resulting vector will be filled with 0s at the beginning, 'end': it will be filled with 0s at the end, 'center': the vector will be surrounded by 0s, both at beginning and end
+        :param pad_on_batch: Whether we get sentences with length of the maximum length of the minibatch or sentences with a fixed (max_text_length) length.
+        :param words_so_far: Experimental feature. Use with caution.
+        :param loading_X: Whether we are loading an input or an output of the model
+        :return: Text as sequence of number. Mask for each sentence.
+        """
+        vocab = vocabularies['words2idx']
+        n_batch = len(X)
+        if max_len == 0:  # use whole sentence as class
+            X_out = np.zeros(n_batch).astype('int32')
+            for i in range(n_batch):
+                w = X[i]
+                if w in vocab:
+                    X_out[i] = vocab[w]
+                else:
+                    X_out[i] = vocab['<unk>']
+            if loading_X:
+                X_out = (X_out, None)  # This None simulates a mask
+        else:  # process text as a sequence of words
+            if pad_on_batch:
+                max_len_batch = min(max([len(x.split(' ')) for x in X]) + 1, max_len)
+                max_char_batch = min(max([len(p) for f in X for p in f.split(' ')]) , max_word_len)
+            else:
+                max_len_batch = max_len
+                max_char_batch = max_word_len
+
+            if words_so_far:
+                X_out = np.ones((n_batch, max_len_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                X_mask = np.zeros((n_batch, max_len_batch, max_len_batch)).astype('int8')
+                null_row = np.ones((1, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                zero_row = np.zeros((1, max_len_batch)).astype('int8')
+                if offset > 0:
+                    null_row[0] = np.append([vocab['<null>']] * offset, null_row[0, :-offset])
+            else:
+                if max_word_len == 0:
+                    X_out = np.ones((n_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                    X_mask = np.zeros((n_batch, max_len_batch)).astype('int8')
+                else: # We add an extra dimension in the case we are working with characters 
+                    X_out = np.ones((n_batch, max_len_batch, max_word_len)).astype('int32') * self.extra_words['<pad>']
+                    X_mask = np.zeros((n_batch, max_len_batch, max_word_len)).astype('int8')
+
+            if max_len_batch == max_len:
+                max_len_batch -= 1  # always leave space for <eos> symbol
+            # fills text vectors with each word (fills with 0s or removes remaining words w.r.t. max_len)
+            for i in range(n_batch):
+                x = X[i].strip().split(' ')
+                len_j = len(x)
+                if fill == 'start':
+                    offset_j = max_len_batch - len_j - 1
+                elif fill == 'center':
+                    offset_j = (max_len_batch - len_j) / 2
+                else:
+                    offset_j = 0
+                    len_j = min(len_j, max_len_batch)
+                if offset_j < 0:
+                    len_j = len_j + offset_j
+                    offset_j = 0
+
+                if words_so_far:
+                    for j, w in zip(range(len_j), x[:len_j]):
+                        if w in vocab:
+                            next_w = vocab[w]
+                        else:
+                            next_w = vocab['<unk>']
+                        for k in range(j, len_j):
+                            X_out[i, k + offset_j, j + offset_j] = next_w
+                            X_mask[i, k + offset_j, j + offset_j] = 1  # fill mask
+                        X_mask[i, j + offset_j, j + 1 + offset_j] = 1  # add additional 1 for the <eos> symbol
+
+                else:
+                    if max_word_len == 0:
+                        for j, w in zip(range(len_j), x[:len_j]):
+                            if w in vocab:
+                                X_out[i, j + offset_j] = vocab[w]
+                            else:
+                                # print w, "not in vocab!"
+                                X_out[i, j + offset_j] = vocab['<unk>']
+                            X_mask[i, j + offset_j] = 1  # fill mask
+                        X_mask[i, len_j + offset_j] = 1  # add additional 1 for the <eos> symbol
+                    else: # If we are using character level encoding
+                        for j, w in zip(range(len_j), x[:len_j]):
+                            ch = np.ones(max_word_len)*self.extra_words['<pad>']
+                            w = w.decode('utf-8')
+                            lw = list(w)
+                            for h in range(max_word_len-len(w)): # Special case! When the word has less characters than max_word_len we have to fill.
+                                lw.append(0)
+                            for idx, charac in zip(range(max_word_len), list(w)):
+                                ch[idx] = vocab[charac] # We assume that all the characters are in the vocabulary
+                            X_out[i, j] = ch
+                            X_mask[i, j + offset_j] = 1  # fill mask
+                        X_mask[i, len_j + offset_j] = 1  # add additional 1 for the <eos> symbol
+                
+                    if offset > 0:  # Move the text to the right -> null symbol
+                       if words_so_far:
+                            for k in range(len_j):
+                                X_out[i, k] = np.append([vocab['<null>']] * offset, X_out[i, k, :-offset])
+                                X_mask[i, k] = np.append([0] * offset, X_mask[i, k, :-offset])
+                            X_out[i] = np.append(null_row, X_out[i, :-offset], axis=0)
+                            X_mask[i] = np.append(zero_row, X_mask[i, :-offset], axis=0)
+                        else:
+                            X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
+                            X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
+                           
             X_out = (X_out, X_mask)
 
         return X_out
