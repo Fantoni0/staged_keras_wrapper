@@ -265,8 +265,7 @@ class EvalPerformance(KerasCallback):
                                                 self.index2word_y, 
                                                 min_val=self.min_pred_multilabel, 
                                                 verbose=self.verbose)
-                    
-
+                   
             # Store predictions
             if self.write_samples:
                 # Store result
