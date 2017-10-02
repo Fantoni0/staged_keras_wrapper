@@ -112,7 +112,6 @@ class Data_Batch_Generator(object):
                        'num_iterations': num_iterations,
                        'random_samples': random_samples,
                        'shuffle': shuffle}
-        print "Normalization------------>", self.params['normalization']
     def generator(self):
         """
         Gets and processes the data
@@ -192,7 +191,7 @@ class Data_Batch_Generator(object):
                                                           normalization=self.params['normalization'],
                                                           meanSubstraction=self.params['mean_substraction'],
                                                           dataAugmentation=data_augmentation)
-                    data = self.net.prepareData(X_batch, Y_batch)
+                    data = self.net.prepareData(X_batch, Y_batch
             yield (data)
 
 
@@ -425,6 +424,7 @@ class Dataset(object):
         self.vocabulary_len = dict()  # number of words in the vocabulary
         self.text_offset = dict()  # number of timesteps that the text is shifted (to the right)
         self.fill_text = dict()  # text padding mode
+        self.fill_text_char = dict()  # text padding mode
         self.pad_on_batch = dict()  # text padding mode: If pad_on_batch, the sample will have the maximum length
         # of the current batch. Else, it will have a fixed length (max_text_len)
         self.words_so_far = dict()  # if True, each sample will be represented as the complete set of words until
@@ -611,7 +611,7 @@ class Dataset(object):
                  overwrite_split=False, normalization_types=None, data_augmentation_types=None,
                  img_size=[256, 256, 3], img_size_crop=[227, 227, 3], use_RGB=True,
                  # 'raw-image' / 'video'   (height, width, depth)
-                 max_text_len=35, max_word_len=0, tokenization='tokenize_basic', offset=0, fill='end', min_occ=0,  # 'text'
+                 max_text_len=35, max_word_len=0, char_bpe=False, tokenization='tokenize_basic', offset=0, fill='end', fill_char='end', min_occ=0,  # 'text'
                  pad_on_batch=True, build_vocabulary=False, max_words=0, words_so_far=False,  # 'text'
                  feat_len=1024,  # 'image-features' / 'video-features'
                  max_video_len=26  # 'video'
@@ -648,6 +648,7 @@ class Dataset(object):
             :param max_words: a maximum of 'max_words' words from the whole vocabulary will be chosen by number or occurrences
             :param offset: number of timesteps that the text is shifted to the right (for sequential conditional models, which take as input the previous output)
             :param fill: select whether padding before or after the sequence
+            :param fill_char: select whether padding before or after the sequence (Character level)
             :param min_occ: minimum number of occurrences allowed for the words in the vocabulary. (default = 0)
             :param pad_on_batch: the batch timesteps size will be set to the length of the largest sample +1 if True, max_len will be used as the fixed length otherwise
             :param words_so_far: if True, each sample will be represented as the complete set of words until the point defined by the timestep dimension (e.g. t=0 'a', t=1 'a dog', t=2 'a dog is', etc.)
@@ -661,7 +662,6 @@ class Dataset(object):
             
             :param max_video_len: maximum video length, the rest of the data will be padded with 0s (only applicable if the input data is of type 'video' or video-features').
         """
-        print(set_name)
         self.__checkSetName(set_name)
 
         # Insert type and id of input data
@@ -689,9 +689,10 @@ class Dataset(object):
             if self.max_text_len.get(id) is None:
                 self.max_text_len[id] = dict()
             if self.max_word_len.get(id) is None:
-                self.max_word_len[id] = dict();
-            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len,
-                                       max_words, offset, fill, min_occ, pad_on_batch, words_so_far)
+                self.max_word_len[id] = dict()
+            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len,
+                                       max_word_len, char_bpe, max_words, offset, fill, fill_char, min_occ,
+                                       pad_on_batch, words_so_far)
         elif type == 'image-features':
             data = self.preprocessFeatures(path_list, id, set_name, feat_len)
         elif type == 'video-features':
@@ -787,7 +788,7 @@ class Dataset(object):
 
     def setOutput(self, path_list, set_name, type='categorical', id='label', repeat_set=1, overwrite_split=False,
                   sample_weights=False,
-                  tokenization='tokenize_basic', max_text_len=0, offset=0, fill='end', min_occ=0,  # 'text'
+                  tokenization='tokenize_basic', max_text_len=0, max_word_len=0, char_bpe=False, offset=0, fill='end', fill_char='end', min_occ=0,  # 'text'
                   pad_on_batch=True, words_so_far=False, build_vocabulary=False, max_words=0,  # 'text'
                   associated_id_in=None, num_poolings=None,  # '3DLabel' or '3DSemanticLabel'
                   ):
@@ -809,9 +810,11 @@ class Dataset(object):
             :param tokenization: type of tokenization applied (must be declared as a method of this class) (only applicable when type=='text').
             :param build_vocabulary: whether a new vocabulary will be built from the loaded data or not (only applicable when type=='text').
             :param max_text_len: maximum text length, the rest of the data will be padded with 0s (only applicable if the output data is of type 'text') Set to 0 if the whole sentence will be used as an output class.
+            :param max_word_len: maximum length of each word when using Character-based MT. Set to 0 to ignore it. 
             :param max_words: a maximum of 'max_words' words from the whole vocabulary will be chosen by number or occurrences
             :param offset: number of timesteps that the text is shifted to the right (for sequential conditional models, which take as input the previous output)
             :param fill: select whether padding before or after the sequence
+            :param fill_char: select whether padding before or after the sequence (Character Level)
             :param min_occ: minimum number of occurrences allowed for the words in the vocabulary. (default = 0)
             :param pad_on_batch: the batch timesteps size will be set to the length of the largest sample +1 if True, max_len will be used as the fixed length otherwise
             :param words_so_far: if True, each sample will be represented as the complete set of words until the point defined by the timestep dimension (e.g. t=0 'a', t=1 'a dog', t=2 'a dog is', etc.)
@@ -845,8 +848,9 @@ class Dataset(object):
         elif type == 'text':
             if self.max_text_len.get(id) is None:
                 self.max_text_len[id] = dict()
-            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len, 0,
-                                       max_words, offset, fill, min_occ, pad_on_batch, words_so_far)
+                self.max_word_len[id] = dict()
+            data = self.preprocessText(path_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len, char_bpe,
+                                       max_words, offset, fill, fill_char, min_occ, pad_on_batch, words_so_far)
         elif type == 'binary':
             data = self.preprocessBinary(path_list)
         elif type == 'real':
@@ -1101,8 +1105,8 @@ class Dataset(object):
     #       TYPE 'text' SPECIFIC FUNCTIONS
     # ------------------------------------------------------- #
 
-    def preprocessText(self, annotations_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len,
-                       max_words, offset, fill, min_occ, pad_on_batch, words_so_far):
+    def preprocessText(self, annotations_list, id, set_name, tokenization, build_vocabulary, max_text_len, max_word_len,char_bpe,
+                       max_words, offset, fill, fill_char, min_occ, pad_on_batch, words_so_far):
         """
         Preprocess 'text' data type: Builds vocabulary (if necessary) and preprocesses the sentences.
         Also sets Dataset parameters.
@@ -1114,9 +1118,11 @@ class Dataset(object):
         :param build_vocabulary: Whether we should build a vocabulary for this text or not.
         :param max_text_len: Maximum length of the text. If max_text_len == 0, we treat the full sentence as a class.
         :param max_word_len: Maximum length of each word of the text. Set to 0 to use whole words
+        :param char_bpe: When using Character Encoder load the text like chars(FALSE) or BPE(TRUE).
         :param max_words: Maximum number of words to include in the dictionary.
         :param offset: Text shifting.
         :param fill: Whether we path with zeros at the beginning or at the end of the sentences.
+        :param fill_char: Whether we path with zeros at the beginning or at the end of the sentences (Character level).
         :param min_occ: Minimum occurrences of each word to be included in the dictionary.
         :param pad_on_batch: Whether we get sentences with length of the maximum length of the minibatch or sentences with a fixed (max_text_length) length.
         :param words_so_far: Experimental feature. Should be ignored.
@@ -1169,9 +1175,12 @@ class Dataset(object):
 
         # Store max text len and max_word_len
         self.max_text_len[id][set_name] = max_text_len
-        #self.max_word_len[id][set_name] = max_word_len
+        self.max_word_len[id][set_name] = max_word_len
+        # Boolean to use BPE+CHAR
+        self.char_bpe = char_bpe
         self.text_offset[id] = offset
         self.fill_text[id] = fill
+        self.fill_text_char[id] = fill_char
         self.pad_on_batch[id] = pad_on_batch
         self.words_so_far[id] = words_so_far
 
@@ -1508,16 +1517,8 @@ class Dataset(object):
         :param loading_X: Whether we are loading an input or an output of the model
         :return: Text as sequence of number. Mask for each sentence.
         """
-
         vocab = vocabularies['words2idx']
         n_batch = len(X)
-
-        print(max_word_len)
-        print(fillChar)
-
-        # If we are using Character-Based MT (Convolutional character embedding)
-        #if max_word_len > 0:
-        #    return loadTextCharacter(self, X, vocabularies, max_len, max_word_len, offset, fill, fillChar, pad_on_batch)
 
         if max_len == 0:  # use whole sentence as class
             X_out = np.zeros(n_batch).astype('int32')
@@ -1560,7 +1561,8 @@ class Dataset(object):
                     offset_j = 0
                     len_j = min(len_j, max_len_batch)
                 if offset_j < 0:
-                    len_j = len_j + offset_j
+                    if fill == 'center': len_j = len_j + offset_j * 2
+                    else: len_j = len_j + offset_j
                     offset_j = 0
 
                 if words_so_far:
@@ -1593,87 +1595,178 @@ class Dataset(object):
                         X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
                         X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
             X_out = (X_out, X_mask)
-
         return X_out
 
-    def loadTextCharacter(self, X, vocabularies, max_len, max_word_len, offset, fillWord, fillChar, pad_on_batch):
+    def loadTextCharacter(self, X, vocabularies, max_len, max_word_len, fill, fillChar, pad_on_batch):
         """
-        Text encoder: Transforms samples from a text representation into a numerical one. It also masks the text. Each word is represented by a different vector formed by the numerical index of the characters
+        Text encoder: Transforms samples from a text representation into a numerical one. It also masks the text.
+        Each sentence is a row in the matrix. Each row consists on a sequence of vectors. Each vector represents a word
+        and each index of that vector represents the i-th character of the word. 
+         
+        We have two levels of fill. Ordinary fill and fill_char.
+            * The first one inserts vectors of 0s at the 'end'/'start' of each row to fill them when the sentence is too short.
+            * The second one inserts 0s in the character vectors if the word is too short.
 
         :param X: Text to encode.
         :param vocabularies: Mapping word -> index
         :param max_len: Maximum length of the text.
         :param max_word_len: maximum length of the words when using character NMT.
-        :param offset: Shifts the text to the right, adding null symbol at the start
-        :param fill: 'start': the resulting vector will be filled with 0s at the beginning, 'end': it will be filled with 0s at the end, 'center': the vector will be surrounded by 0s, both at beginning and end
+        :param fill: If a matrix row will be filled with 0 vectors at the 'end', 'start' or 'center'. 
+        :param fillChar: 'start': the resulting vector will be filled with 0s at the beginning, 'end': it will be filled with 0s at the end, 'center': the vector will be surrounded by 0s, both at beginning and end
         :param pad_on_batch: Whether we get sentences with length of the maximum length of the minibatch or sentences with a fixed (max_text_length) length.
-        :param words_so_far: Experimental feature. Use with caution.
-        :param loading_X: Whether we are loading an input or an output of the model
         :return: Text as sequence of number. Mask for each sentence.
         """
         vocab = vocabularies['words2idx']
-        n_batch = len(X)
-        if pad_on_batch:
-            max_len_batch = min(max([len(x.split(' ')) for x in X]) + 1, max_len)
-            max_char_batch = min(max([len(p) for f in X for p in f.split(' ')]), max_word_len)
-        else:
-            max_len_batch = max_len
-            max_char_batch = max_word_len
+        n_batch = len(X)  # Number of sentences
+        detokenizedText = [self.detokenize_none_char_nosymbol(x) for x in X]
 
-        # Add an extra dimension in the case we are working with characters
-        X_out = np.ones((n_batch, max_len_batch, max_char_batch)).astype('int32') * self.extra_words['<pad>']
-        X_mask = np.zeros((n_batch, max_len_batch, max_char_batch)).astype('int8')
+        # Add an extra dimension
+        X_out = np.ones((n_batch, max_len, max_word_len)).astype('int32') * self.extra_words['<pad>']
+        X_mask = np.zeros((n_batch, max_len, max_word_len)).astype('int8')
 
-        if max_len_batch == max_len:
-            max_len_batch -= 1  # always leave space for <eos> symbol
-
-        # fills text vectors with each word (fills with 0s or removes remaining words w.r.t. max_len)
-        for i in range(n_batch):
-            x = X[i].strip().split(' ')
-            len_j = len(x)
+        for i in range(n_batch):  # For each sentence
+            x = detokenizedText[i].strip().split(' ')
+            len_j = len(x)  # How many words in the sentence
             if fillChar == 'start':
-                offset_j = max_len_batch - len_j - 1
+                offset_j = max_len - len_j
             elif fillChar == 'center':
-                offset_j = (max_len_batch - len_j) / 2
+                offset_j = (max_len - len_j) / 2
             else:
                 offset_j = 0
-                len_j = min(len_j, max_len_batch)
-            # If 
+                len_j = min(len_j, max_len)
+
             if offset_j < 0:
-                len_j = len_j + offset_j
+                if fillChar == 'center': len_j = len_j + offset_j*2
+                else: len_j = len_j + offset_j
                 offset_j = 0
-
             # If we are using character level encoding
-            for j, w in zip(range(len_j), x[:len_j]):                           # For each word
-
-                ch = np.ones(max_char_batch)*self.extra_words['<pad>']
+            for j, w in zip(range(len_j), x[:len_j]):  # For each word in the sentence
+                ch = np.ones(max_word_len) * self.extra_words['<pad>']
+                maskch = np.zeros(max_word_len).astype('int8')
                 w = w.decode('utf-8')
                 lw = list(w)
                 len_c = len(w)
-
                 if fillChar == 'start':
-                    offset_c = max_char_batch - len_c - 1
+                    offset_c = max_word_len - len_c
                 elif fillChar == 'center':
-                    offset_c = (max_char_batch - len_c) / 2
+                    offset_c = (max_word_len - len_c) / 2
                 else:
                     offset_c = 0
-                    len_c = min(len_c, max_char_batch)
-              
-                for idx, cha in zip(range(max_char_batch), list(w)):            # For each character
-                    ch[ idxi + offset_c ] = vocab[cha]  # We assume that all the characters are in the vocabulary. No unknown characters (we hope)
-                X_out[i, j + offset_j ] = ch
-                X_mask[i, j] = np.ones(max_char_batch)  # fill mask
-            #X_mask[i, len_j] = 1  # add additional 1 for the <eos> symbol
+                    len_c = min(len_c, max_word_len)
 
-            #if offset > 0:  # Move the text to the right -> null symbol
-            #    X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
-            #    X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
-            
+                if offset_c < 0:
+                    if fillChar == 'center': len_c = len_c + offset_c*2  # Offset_c is supposed to be negative
+                    else: len_c = len_c + offset_c
+                    offset_c = 0
+
+                for idx, cha in enumerate(lw[:len_c]):  # For each character
+                    if cha.encode('utf-8') in vocab:
+                        ch[idx + offset_c] = vocab[cha.encode('utf-8')]
+                    else:
+                        ch[idx + offset_c] = vocab['<unk>']  # In theory no unknowns characters should exist.
+                    maskch[idx + offset_c] = 1
+                X_out[i, j + offset_j] = ch
+                X_mask[i, j + offset_j] = maskch  # fill mask
+            #if random.randint(1, 100) == 50:
+            #    print(("Frase: ", x))
+            #    #print(("Palabra ", w))
+            #    print(X_out)
+            #    #print(X_mask)
+            #    #sys.exit(0)
         X_out = (X_out, X_mask)
-
         return X_out
 
-    def loadTextOneHot(self, X, vocabularies, vocabulary_len, max_len, offset, fill, pad_on_batch, words_so_far,
+    def loadTextBPE(self, X, vocabularies, max_len, max_word_len, fill, fillChar, pad_on_batch):
+        """
+        Similar to loadTextcharacter but now the sentences are not tokenized in characters. They are tokenized using BPE:
+        
+            * Characters = 'I </s> l i k e </s> t o m a t o s </s>'
+            * BPE        = 'I@ lik e@ tomat os@'
+        
+        The goal is the same load them into a matrix but now with a different tokenization. 
+        
+        Text encoder: Transforms samples from a text representation into a numerical one. It also masks the text.
+        Each sentence is a row in the matrix. Each row consists on a sequence of vectors. Each vector represents a word
+        and each index of that vector represents the i-th character of the word. 
+         
+        We have two levels of fill. Ordinary fill and fill_char.
+            * The first one inserts vectors of 0s at the 'end'/'start' of each row to fill them when the sentence is too short.
+            * The second one inserts 0s in the character vectors if the word is too short.
+
+        :param X: Text to encode.
+        :param vocabularies: Mapping word -> index
+        :param max_len: Maximum length of the text.
+        :param max_word_len: maximum length of the words when using character NMT.
+        :param fill: If a matrix row will be filled with 0 vectors at the 'end', 'start' or 'center'. 
+        :param fillChar: 'start': the resulting vector will be filled with 0s at the beginning, 'end': it will be filled with 0s at the end, 'center': the vector will be surrounded by 0s, both at beginning and end
+        :param pad_on_batch: Whether we get sentences with length of the maximum length of the minibatch or sentences with a fixed (max_text_length) length.
+        :return: Text as sequence of number. Mask for each sentence.
+        """
+        vocab = vocabularies['words2idx']
+        n_batch = len(X)  # Number of sentences
+        # Add an extra dimension
+        X_out = np.ones((n_batch, max_len, max_word_len)).astype('int32') * self.extra_words['<pad>']
+        X_mask = np.zeros((n_batch, max_len, max_word_len)).astype('int8')
+
+        for i in range(n_batch):  # For each sentence
+            x = X[i].strip().split()
+            len_j = sum([1 for j in x if not j[-1]=='@'])  # WORDS. We count all the words not ending with an '@'
+
+            if fillChar == 'start':
+                offset_j = max_len - len_j
+            elif fillChar == 'center':
+                offset_j = (max_len - len_j) / 2
+            else:
+                offset_j = 0
+                len_j = min(len_j, max_len)
+
+            if offset_j < 0:
+                if fillChar == 'center': len_j = len_j + offset_j*2
+                else: len_j = len_j + offset_j
+                offset_j = 0
+
+            # If we are using character level encoding
+            x_ori = "".join(x.strip() for x in X[i].strip().split('@@'))  # Reconstructed original sentence
+            st = 0
+            for j, w in zip(range(len_j), x_ori.split()[:len_j]):  # For each word in the sentence
+                ch = np.ones(max_word_len) * self.extra_words['<pad>']
+                maskch = np.zeros(max_word_len).astype('int8')
+                # Count BPE componets for each word
+                len_c = 1
+                list_bpe = []
+                list_bpe.append(x[st])
+                while x[st][-1]=='@':
+                    st += 1
+                    list_bpe.append(x[st])
+                    len_c += 1
+                st += 1
+
+                if fillChar == 'start':
+                    offset_c = max_word_len - len_c
+                elif fillChar == 'center':
+                    offset_c = (max_word_len - len_c) / 2
+                else:
+                    offset_c = 0
+                    len_c = min(len_c, max_word_len)
+
+                if offset_c < 0:
+                    if fillChar == 'center': len_c = len_c + offset_c*2  # Offset_c is supposed to be negative
+                    else: len_c = len_c + offset_c
+                    offset_c = 0
+
+                #print(list_bpe)
+                for idx, bpe in enumerate(list_bpe[:len_c]):  # For each BPE component
+                    if bpe.decode('utf-8') in vocab:
+                        ch[idx + offset_c] = vocab[bpe.decode('utf-8')]
+                    else:
+                        ch[idx + offset_c] = vocab['<unk>']  # Unknown BPE components here.
+                    maskch[idx + offset_c] = 1
+                X_out[i, j + offset_j] = ch
+                X_mask[i, j + offset_j] = maskch  # fill mask
+        X_out = (X_out, X_mask)
+        return X_out
+
+    def loadTextOneHot(self, X, vocabularies, vocabulary_len, max_len, max_word_len, offset, fill, fill_char, pad_on_batch, words_so_far,
                        sample_weights=False, loading_X=False):
 
         """
@@ -1690,7 +1783,7 @@ class Dataset(object):
         :return: Text as sequence of number. Mask for each sentence.
         """
 
-        y = self.loadText(X, vocabularies, max_len, offset, fill, pad_on_batch,
+        y = self.loadText(X, vocabularies, max_len, max_word_len, offset, fill, fill_char, pad_on_batch,
                           words_so_far, loading_X=loading_X)
         # Use whole sentence as class (classifier model)
         if max_len == 0:
@@ -1908,6 +2001,8 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
+        if (type(caption) == type([])):
+                caption = ' '.join(caption)
         tokenized = re.sub('[\n\t]+', '', caption.strip())
         return tokenized
 
@@ -1943,7 +2038,7 @@ class Dataset(object):
         tokenized = re.sub('&quot;', ' " ', tokenized)
         tokenized = re.sub('&#91;', ' [ ', tokenized)
         tokenized = re.sub('&#93;', ' ] ', tokenized)
-        tokenized = re.sub('[  ]+', ' ', tokenized)
+        tokenized = re.sub('[ ]+', ' ', tokenized)
         tokenized = [convert_chars(char) for char in tokenized.decode('utf-8')]
         tokenized = " ".join(tokenized)
         return tokenized
@@ -2001,42 +2096,45 @@ class Dataset(object):
         tokenized = " ".join(out)
         return tokenized
 
-    def detokenize_none_char(self,caption):
-	"""
-	Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by 
-	the <space> token. If found an special character is converted to the escaped char.
-	# List of escaped chars (by moses tokenizer)
-        & ->  &amp;
-        | ->  &#124;
-        < ->  &lt;
-        > ->  &gt;
-        ' ->  &apos;
-        " ->  &quot;
-        [ ->  &#91;
-        ] ->  &#93;
-        :param caption: String to de-tokenize
-        :return: Detokenized version of caption
-	"""
-	
+    def detokenize_none_char(self, caption):
+        """
+        Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by 
+        the <space> token. If found an special character is converted to the escaped char.
+        # List of escaped chars (by moses tokenizer)
+            & ->  &amp;
+            | ->  &#124;
+            < ->  &lt;
+            > ->  &gt;
+            ' ->  &apos;
+            " ->  &quot;
+            [ ->  &#91;
+            ] ->  &#93;
+            :param caption: String to de-tokenize
+            :return: Detokenized version of caption
+        """
         detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
-	detokenized = re.sub(' \| ', ' &#124; ', detokenized)
-	detokenized = re.sub(' > ', ' &gt; ', detokenized)
-	detokenized = re.sub(' < ', ' &lt; ', detokenized)
-	detokenized = re.sub( "' ", ' &apos; ', detokenized)
-	detokenized = re.sub( '" ', ' &quot; ', detokenized)
-	detokenized = re.sub( '\[ ', ' &#91; ', detokenized)
-	detokenized = re.sub( '\] ', ' &#93; ', detokenized)
+        detokenized = re.sub(' \| ', ' &#124; ', detokenized)
+        detokenized = re.sub(' > ', ' &gt; ', detokenized)
+        detokenized = re.sub(' < ', ' &lt; ', detokenized)
+        detokenized = re.sub( "'", ' &apos;', detokenized)
+        detokenized = re.sub( '" ', ' &quot;', detokenized)
+        detokenized = re.sub( '\[ ', ' &#91; ', detokenized)
+        detokenized = re.sub( '\] ', ' &#93; ', detokenized)
         detokenized = re.sub( ' ', '', detokenized)
         detokenized = re.sub( '<space>', ' ', detokenized)
-	return detokenized
+        return detokenized.strip()
 
-    def detokenize_bpe(self,caption):
+    def detokenize_none_char_nosymbol(self, caption):
         """
-        Reverts BPE segmentation (https://github.com/rsennrich/subword-nmt)
+        Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by
+        the <space> token. NO SPECIAL CHARACTERS ARE ONVERTED
+            :param caption: String to de-tokenize.
+            :return: Detokenized version of caption.
         """
-        detokenized = re.sub('@@ ', '', str(caption).strip())
+
+        detokenized = re.sub(' ', '', str(caption).strip())
+        detokenized = re.sub('<space>', ' ', detokenized)
         return detokenized
-
 
     def tokenize_CNN_sentence(self, caption):
         """
@@ -2164,40 +2262,6 @@ class Dataset(object):
         detokenized = re.sub(separator + ' ', '', str(caption).strip())
         return detokenized
 
-    def detokenize_none_char(self, caption):
-        """
-        Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by
-        the <space> token. If found an special character is converted to the escaped char.
-        # List of escaped chars (by moses tokenizer)
-            & ->  &amp;
-            | ->  &#124;
-            < ->  &lt;
-            > ->  &gt;
-            ' ->  &apos;
-            " ->  &quot;
-            [ ->  &#91;
-            ] ->  &#93;
-            :param caption: String to de-tokenize.
-            :return: Detokenized version of caption.
-        """
-
-        def deconvert_chars(x):
-            if x == '<space>':
-                return ' '
-            else:
-                return x.encode('utf-8')
-
-        detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
-        detokenized = re.sub(' \| ', ' &#124; ', detokenized)
-        detokenized = re.sub(' > ', ' &gt; ', detokenized)
-        detokenized = re.sub(' < ', ' &lt; ', detokenized)
-        detokenized = re.sub("' ", ' &apos; ', detokenized)
-        detokenized = re.sub('" ', ' &quot; ', detokenized)
-        detokenized = re.sub('\[ ', ' &#91; ', detokenized)
-        detokenized = re.sub('\] ', ' &#93; ', detokenized)
-        detokenized = re.sub(' ', '', detokenized)
-        detokenized = re.sub('<space>', ' ', detokenized)
-        return detokenized
 
     # ------------------------------------------------------- #
     #       TYPE 'video' and 'video-features' SPECIFIC FUNCTIONS
@@ -3064,7 +3128,6 @@ class Dataset(object):
         """
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
-
         if final > eval('self.len_' + set_name):
             raise Exception('"final" index must be smaller than the number of samples in the set.')
         if init < 0:
@@ -3095,9 +3158,24 @@ class Dataset(object):
                     x = self.loadVideos(x, id_in, final, set_name, self.max_video_len[id_in],
                                         normalization_type, normalization, meanSubstraction, dataAugmentation)
                 elif type_in == 'text':
-                    x = self.loadText(x, self.vocabulary[id_in],
-                                      self.max_text_len[id_in][set_name], self.text_offset[id_in],
-                                      fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
+                    # If we are using Character-Based MT (Convolutional character embedding)
+                    if self.max_word_len[id_in][set_name] > 0 and id_in == 'source_text':
+                        if self.char_bpe:
+                            x = self.loadTextBPE(x, self.vocabulary[id_in],
+                                            self.max_text_len[id_in][set_name],
+                                            self.max_word_len[id_in][set_name],
+                                            fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                            pad_on_batch=self.pad_on_batch[id_in])[0]
+                        else:
+                            x = self.loadTextCharacter(x, self.vocabulary[id_in],
+                                                   self.max_text_len[id_in][set_name],
+                                                   self.max_word_len[id_in][set_name],
+                                                   fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                                   pad_on_batch=self.pad_on_batch[id_in])[0]
+                    else:
+                        x = self.loadText(x, self.vocabulary[id_in],
+                                      self.max_text_len[id_in][set_name], self.max_word_len[id_in][set_name], self.text_offset[id_in],
+                                      fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in], pad_on_batch=self.pad_on_batch[id_in],
                                       words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
                     #normalization = False; ## ARF project - DELETE ASAP
@@ -3143,7 +3221,6 @@ class Dataset(object):
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
         self.__isLoaded(set_name, 1)
-
         [new_last, last, surpassed] = self.__getNextSamples(k, set_name)
 
         # Recover input samples
@@ -3177,10 +3254,27 @@ class Dataset(object):
                     x = self.loadVideos(x, id_in, last, set_name, self.max_video_len[id_in],
                                         normalization_type, normalization, meanSubstraction, dataAugmentation)
                 elif type_in == 'text':
-                    x = self.loadText(x, self.vocabulary[id_in],
-                                      self.max_text_len[id_in][set_name], self.text_offset[id_in],
-                                      fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
-                                      words_so_far=self.words_so_far[id_in], loading_X=True)[0]
+                    # If we are using Character-Based MT (Convolutional character embedding)
+                    if self.max_word_len[id_in][set_name] > 0 and id_in == 'source_text':
+                        if self.char_bpe:
+                            x = self.loadTextBPE(x, self.vocabulary[id_in],
+                                                 self.max_text_len[id_in][set_name],
+                                                 self.max_word_len[id_in][set_name],
+                                                 fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                                 pad_on_batch=self.pad_on_batch[id_in])[0]
+                        else:
+                            x = self.loadTextCharacter(x, self.vocabulary[id_in],
+                                                       self.max_text_len[id_in][set_name],
+                                                       self.max_word_len[id_in][set_name],
+                                                       fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                                       pad_on_batch=self.pad_on_batch[id_in])[0]
+                    else:
+                        x = self.loadText(x, self.vocabulary[id_in],
+                                          self.max_text_len[id_in][set_name], self.max_word_len[id_in][set_name],
+                                          self.text_offset[id_in],
+                                          fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                          pad_on_batch=self.pad_on_batch[id_in], words_so_far=self.words_so_far[id_in],
+                                          loading_X=True)[0]
                 elif type_in == 'image-features':
                     x = self.loadFeatures(x, self.features_lengths[id_in], normalization_type, normalization,
                                           data_augmentation=dataAugmentation)
@@ -3234,10 +3328,11 @@ class Dataset(object):
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
                 elif type_out == 'text':
-                    y = self.loadText(y, self.vocabulary[id_out],
-                                      self.max_text_len[id_out][set_name], self.text_offset[id_out],
-                                      fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
-                                      words_so_far=self.words_so_far[id_out], loading_X=False)
+
+                    y = self.loadText(y,  self.vocabulary[id_out],
+                                  self.max_text_len[id_out][set_name], 0, self.text_offset[id_out],  # No self.max_word_len[id_out][set_name] we just need encoding char level
+                                  fill=self.fill_text[id_out], fillChar=self.fill_text_char[id_out],
+                                  pad_on_batch=self.pad_on_batch[id_out], words_so_far=self.words_so_far[id_out], loading_X=False)
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
                         y_aux = np_utils.to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
@@ -3245,16 +3340,13 @@ class Dataset(object):
                     else:
                         y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
-                                np.uint8)
+                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(np.uint8)
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
                     y = y_aux
             Y.append(y)
-
         if debug:
             return [X, Y, [new_last, last, surpassed]]
-
         return [X, Y]
 
     def getXY_FromIndices(self, set_name, k, normalization_type='0-1', normalization=False, meanSubstraction=True,
@@ -3285,11 +3377,9 @@ class Dataset(object):
 
             :return: [X,Y], list of input and output data variables of the samples identified by the indices in 'k' samples belonging to the chosen 'set_name'
         """
-
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
         self.__isLoaded(set_name, 1)
-
         # Recover input samples
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
@@ -3318,12 +3408,28 @@ class Dataset(object):
                     x = self.loadVideosByIndex(x, id_in, k, set_name, self.max_video_len[id_in],
                                                normalization_type, normalization, meanSubstraction, dataAugmentation)
                 elif type_in == 'text':
-                    x = self.loadText(x, self.vocabulary[id_in],
-                                      self.max_text_len[id_in][set_name], self.text_offset[id_in],
-                                      fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
-                                      words_so_far=self.words_so_far[id_in], loading_X=True)[0]
+                    # If we are using Character-Based MT (Convolutional character embedding)
+                    if self.max_word_len[id_in][set_name] > 0 and id_in == 'source_text':
+                        if self.char_bpe:
+                            x = self.loadTextBPE(x, self.vocabulary[id_in],
+                                                 self.max_text_len[id_in][set_name],
+                                                 self.max_word_len[id_in][set_name],
+                                                 fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                                 pad_on_batch=self.pad_on_batch[id_in])[0]
+                        else:
+                            x = self.loadTextCharacter(x, self.vocabulary[id_in],
+                                                       self.max_text_len[id_in][set_name],
+                                                       self.max_word_len[id_in][set_name],
+                                                       fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                                       pad_on_batch=self.pad_on_batch[id_in])[0]
+                    else:
+                        x = self.loadText(x, self.vocabulary[id_in],
+                                          self.max_text_len[id_in][set_name], self.max_word_len[id_in][set_name],
+                                          self.text_offset[id_in],
+                                          fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in],
+                                          pad_on_batch=self.pad_on_batch[id_in],
+                                          words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
-                    #normalization = False # ARF project - Remove ASAP
                     x = self.loadFeatures(x, self.features_lengths[id_in], normalization_type, normalization,
                                           data_augmentation=dataAugmentation)
                 elif type_in == 'video-features':
@@ -3367,10 +3473,9 @@ class Dataset(object):
                                                   imlist)
                 elif type_out == 'text':
                     y = self.loadText(y, self.vocabulary[id_out],
-                                      self.max_text_len[id_out][set_name], self.text_offset[id_out],
-                                      fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
+                                      self.max_text_len[id_out][set_name],  self.max_word_len[id_out][set_name], self.text_offset[id_out],
+                                      fill=self.fill_text[id_out], fillChar = self.fill_text_char[id_out], pad_on_batch=self.pad_on_batch[id_out],
                                       words_so_far=self.words_so_far[id_out], loading_X=False)
-
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
                         y_aux = np_utils.to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
@@ -3378,8 +3483,7 @@ class Dataset(object):
                     else:
                         y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
-                                np.uint8)
+                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(np.uint8)
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
                     y = y_aux
@@ -3415,11 +3519,9 @@ class Dataset(object):
 
             :return: [X,Y], list of input and output data variables of the samples identified by the indices in 'k' samples belonging to the chosen 'set_name'
         """
-
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
         self.__isLoaded(set_name, 1)
-
         # Recover input samples
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
@@ -3449,8 +3551,8 @@ class Dataset(object):
                                                normalization_type, normalization, meanSubstraction, dataAugmentation)
                 elif type_in == 'text':
                     x = self.loadText(x, self.vocabulary[id_in],
-                                      self.max_text_len[id_in][set_name], self.text_offset[id_in],
-                                      fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
+                                      self.max_text_len[id_in][set_name], self.max_word_len[id_in][set_name], self.text_offset[id_in],
+                                      fill=self.fill_text[id_in], fillChar=self.fill_text_char[id_in], pad_on_batch=self.pad_on_batch[id_in],
                                       words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
                     x = self.loadFeatures(x, self.features_lengths[id_in], normalization_type, normalization,
@@ -3531,8 +3633,8 @@ class Dataset(object):
                                                   imlist)
                 elif type_out == 'text':
                     y = self.loadText(y, self.vocabulary[id_out],
-                                      self.max_text_len[id_out][set_name], self.text_offset[id_out],
-                                      fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
+                                      self.max_text_len[id_out][set_name], self.max_word_len[id_out][set_name], self.text_offset[id_out],
+                                      fill=self.fill_text[id_out], fillChar=self.fill_text_char[id_out], pad_on_batch=self.pad_on_batch[id_out],
                                       words_so_far=self.words_so_far[id_out], loading_X=False)
 
                     # Use whole sentence as class (classifier model)

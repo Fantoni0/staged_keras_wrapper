@@ -451,15 +451,20 @@ class Sample(KerasCallback):
                 if self.is_3DLabel:
                     postprocess_fun = [self.ds.convert_3DLabels_to_bboxes, self.extra_vars[s]['references_orig_sizes']]
                 predictions = self.model_to_eval.predictNet(self.ds, params_prediction, postprocess_fun=postprocess_fun)
-
-
             if self.print_sources:
                 if self.in_pred_idx is not None:
                     sources = [srcs for srcs in sources[0][self.in_pred_idx]]
-                sources = decode_predictions_beam_search(sources,
-                                                         self.index2word_x,
-                                                         pad_sequences=True,
-                                                         verbose=self.verbose)
+                if np.array(sources).ndim == 3:
+                    sources = map(lambda x: decode_predictions_beam_search(x,
+                                                                           self.index2word_x,
+                                                                           pad_sequences=True,
+                                                                           verbose=self.verbose), sources)
+                else:
+                    sources = decode_predictions_beam_search(sources,
+                                                             self.index2word_x,
+                                                             pad_sequences=True,
+                                                             verbose=self.verbose)
+
 
             if s in predictions:
                 if params_prediction['pos_unk']:
