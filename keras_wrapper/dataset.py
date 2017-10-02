@@ -1667,12 +1667,6 @@ class Dataset(object):
                     maskch[idx + offset_c] = 1
                 X_out[i, j + offset_j] = ch
                 X_mask[i, j + offset_j] = maskch  # fill mask
-            #if random.randint(1, 100) == 50:
-            #    print(("Frase: ", x))
-            #    #print(("Palabra ", w))
-            #    print(X_out)
-            #    #print(X_mask)
-            #    #sys.exit(0)
         X_out = (X_out, X_mask)
         return X_out
 
