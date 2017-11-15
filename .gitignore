@@ -1,0 +1,4 @@
+*.pyc
+keras_wrapper/Datasets
+keras_wrapper/Models
+.idea
