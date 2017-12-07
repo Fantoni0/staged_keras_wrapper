@@ -1794,8 +1794,8 @@ class Dataset(object):
 
         for i in range(n_batch):  # For each sentence
             x = X[i].strip().split()
-            len_j = sum([1 for j in x if not j[-1]=='@'])  # WORDS. We count all the words not ending with an '@'
-
+            #len_j = sum([1 for j in x if not j[-1]=='@'])  # WORDS. We count all the words not ending with an '@'
+            len_j = len(x) # All words are considered a word by themselves
             if fillChar == 'start':
                 offset_j = max_len - len_j
             elif fillChar == 'center':
@@ -1810,12 +1810,15 @@ class Dataset(object):
                 offset_j = 0
 
             # If we are using character level encoding
-            x_ori = "".join(x.strip() for x in X[i].strip().split('@@'))  # Reconstructed original sentence
-            st = 0
-            for j, w in zip(range(len_j), x_ori.split()[:len_j]):  # For each word in the sentence
+            #x_ori = "".join(x.strip() for x in X[i].strip().split('@@'))  # Reconstructed original sentence
+            #st = 0
+            for j, w in zip(range(len_j), x[:len_j]):  # For each word in the sentence
                 ch = np.ones(max_word_len) * self.extra_words['<pad>']
                 maskch = np.zeros(max_word_len).astype('int8')
-                # Count BPE componets for each word
+                # Count BPE components for each word
+                w = w.decode('utf-8')
+                len_c = len(w)
+                '''
                 len_c = 1
                 list_bpe = []
                 list_bpe.append(x[st])
@@ -1824,7 +1827,7 @@ class Dataset(object):
                     list_bpe.append(x[st])
                     len_c += 1
                 st += 1
-
+                '''
                 if fillChar == 'start':
                     offset_c = max_word_len - len_c
                 elif fillChar == 'center':
@@ -1838,9 +1841,9 @@ class Dataset(object):
                     else: len_c = len_c + offset_c
                     offset_c = 0
 
-                for idx, bpe in enumerate(list_bpe[:len_c]):  # For each BPE component
-                    if bpe.decode('utf-8') in vocab:
-                        ch[idx + offset_c] = vocab[bpe.decode('utf-8')]
+                for idx, chbpe in enumerate(w[:len_c]):  # For each BPE component
+                    if chbpe in vocab:
+                        ch[idx + offset_c] = vocab[chbpe] #w.decode('utf-8')
                     else:
                         ch[idx + offset_c] = vocab['<unk>']  # Unknown BPE components here.
                     maskch[idx + offset_c] = 1
