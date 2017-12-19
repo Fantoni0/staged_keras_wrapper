@@ -166,6 +166,7 @@ def loadModel(model_path, update_num, reload_epoch=True, custom_objects=None, fu
 
     # Load Model_Wrapper information
     try:
+
         model_wrapper = pk.load(open(model_name + '_Model_Wrapper.pkl', 'rb'))
     except:  # backwards compatibility
         # try:
@@ -1150,7 +1151,6 @@ class Model_Wrapper(object):
         """
         in_data = {}
         n_samples = states_below.shape[0]
-
         ##########################################
         # Choose model to use for sampling
         ##########################################
@@ -2018,6 +2018,7 @@ class Model_Wrapper(object):
                     "The following attributes must be inserted to the model when building a temporally_linked model:\n",
                     "- matchings_sample_to_next_sample\n",
                     "- ids_temporally_linked_inputs\n")
+
         predictions = dict()
         references = []
         sources_sampling = []
@@ -2035,6 +2036,8 @@ class Model_Wrapper(object):
                 if not params['optimized_search']:  # use optimized search model if available
                     assert not params['pos_unk'], 'PosUnk is not supported with non-optimized beam search methods'
 
+                if params['temporally_linked']:
+                    params['state_below_index'] = 1
                 params['pad_on_batch'] = ds.pad_on_batch[params['dataset_inputs'][params['state_below_index']]]
 
                 if params['temporally_linked']:
@@ -2058,7 +2061,8 @@ class Model_Wrapper(object):
                                                              normalization=params['normalize'],
                                                              data_augmentation=False,
                                                              mean_substraction=params['mean_substraction'],
-                                                             predict=True)
+                                                             predict=True,
+                                                             temporally_linked=params['temporally_linked'])
                     data_gen = data_gen_instance.generator()
                 else:
                     n_samples = params['n_samples']
@@ -2119,11 +2123,11 @@ class Model_Wrapper(object):
                         for input_id in params['model_inputs']:
                             if params['temporally_linked'] and input_id in self.ids_temporally_linked_inputs:
                                 link = int(X[params['link_index_id']][i])
-                                if link not in previous_outputs[
-                                    input_id].keys():  # input to current sample was not processed yet
+                                if link not in previous_outputs[input_id].keys():  # input to current sample was not processed yet
                                     link = -1
                                 prev_x = [ds.vocabulary[input_id]['idx2words'][w] for w in
                                           previous_outputs[input_id][link]]
+
                                 x[input_id] = ds.loadText([' '.join(prev_x)], ds.vocabulary[input_id],
                                                           ds.max_text_len[input_id][s],
                                                           ds.text_offset[input_id],
@@ -2187,7 +2191,7 @@ class Model_Wrapper(object):
                             for (output_id, input_id) in self.matchings_sample_to_next_sample.iteritems():
                                 # Get all words previous to the padding
                                 previous_outputs[input_id][first_idx + sampled - 1] = best_sample[:sum(
-                                    [int(elem > 0) for elem in best_sample])]
+                                    [int(elem > 0) for elem in best_sample])]                                
 
                 sys.stdout.write('\n Total cost of the translations: %f \t Average cost of the translations: %f\n' % (
                     total_cost, total_cost / n_samples))

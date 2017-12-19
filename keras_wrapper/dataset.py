@@ -3333,7 +3333,6 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = eval('self.X_' + set_name + '[id_in][init:final]')
-
             if not debug and not ghost_x:
                 if type_in == 'raw-image':
                     daRandomParams = None
@@ -3361,7 +3360,7 @@ class Dataset(object):
                                                    pad_on_batch=self.pad_on_batch[id_in])[0]
                     else:
                         x = self.loadText(x, self.vocabulary[id_in],
-                                      self.max_text_len[id_in][set_name], self.text_offset[id_in], #self.max_word_len[id_in][set_name]
+                                      self.max_text_len[id_in][set_name], self.text_offset[id_in],
                                       fill=self.fill_text[id_in], pad_on_batch=self.pad_on_batch[id_in],
                                       words_so_far=self.words_so_far[id_in], loading_X=True)[0]
                 elif type_in == 'image-features':
@@ -3428,7 +3427,6 @@ class Dataset(object):
                         'self.X_' + set_name + '[id_in][0:new_last]')
                 else:
                     x = eval('self.X_' + set_name + '[id_in][last:new_last]')
-
             # Pre-process inputs
             if not debug:
                 if type_in == 'raw-image':
@@ -3477,7 +3475,6 @@ class Dataset(object):
                 y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
             else:
                 y = eval('self.Y_' + set_name + '[id_out][last:new_last]')
-
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':
@@ -3582,7 +3579,6 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
-
             # if(set_name=='val'):
             #    logging.info(x)
 
@@ -3725,7 +3721,6 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
-
             # if(set_name=='val'):
             #    logging.info(x)
 
@@ -3817,7 +3812,6 @@ class Dataset(object):
         Y = []
         for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
             y = eval('self.Y_' + set_name + '[id_out][init:final]')
-
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':

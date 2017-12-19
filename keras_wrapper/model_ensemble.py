@@ -27,6 +27,27 @@ class BeamSearchEnsemble:
         self.return_alphas = params_prediction.get('coverage_penalty', False) or params_prediction.get('pos_unk', False)
         self.n_best = n_best
         self.verbose = verbose
+
+        # Inputs and outputs names for models of class Model
+        self.ids_inputs = list()
+        self.ids_outputs = list()
+
+        # Inputs and outputs names for models for optimized search
+        self.ids_inputs_init = list()
+        self.ids_outputs_init = list()
+        self.ids_inputs_next = list()
+        self.ids_outputs_next = list()
+
+        # Matchings from model_init to mode_next:
+        self.matchings_init_to_next = None
+        self.matchings_next_to_next = None
+
+        # Inputs and outputs names for models with temporally linked samples
+        self.ids_temporally_linked_inputs = list()
+
+        # Matchings between temporally linked samples
+        self.matchings_sample_to_next_sample = None
+
         if self.verbose > 0:
             logging.info('<<< "Optimized search: %s >>>' % str(self.optimized_search))
 
@@ -68,7 +89,7 @@ class BeamSearchEnsemble:
         else:
             return probs
 
-    def beam_search(self, X, params, eos_sym=0, null_sym=2):
+    def beam_search(self, X, params, return_alphas=False, eos_sym=0, null_sym=2):
         """
         Beam search method for Cond models.
         (https://en.wikibooks.org/wiki/Artificial_Intelligence/Search/Heuristic_search/Beam_search)
@@ -108,6 +129,7 @@ class BeamSearchEnsemble:
         live_k = 1  # samples that did not yet reached eos
         hyp_samples = [[]] * live_k
         hyp_scores = np.zeros(live_k).astype('float32')
+        ret_alphas = return_alphas or params['pos_unk']
         if self.return_alphas:
             sample_alphas = []
             hyp_alphas = [[]] * live_k
@@ -129,6 +151,7 @@ class BeamSearchEnsemble:
             state_below = np.asarray([null_sym] * live_k) \
                 if pad_on_batch else np.asarray([np.zeros(maxlen)] * live_k)
         prev_outs = [None] * len(self.models)
+
         for ii in xrange(maxlen):
             # for every possible live sample calc prob for every possible label
             if self.optimized_search:  # use optimized search model if available
@@ -184,7 +207,7 @@ class BeamSearchEnsemble:
                 if new_hyp_samples[idx][-1] == eos_sym:  # finished sample
                     samples.append(new_hyp_samples[idx])
                     sample_scores.append(new_hyp_scores[idx])
-                    if self.return_alphas:
+                    if ret_alphas:
                         sample_alphas.append(new_hyp_alphas[idx])
                     dead_k += 1
                 else:
@@ -192,7 +215,7 @@ class BeamSearchEnsemble:
                     new_live_k += 1
                     hyp_samples.append(new_hyp_samples[idx])
                     hyp_scores.append(new_hyp_scores[idx])
-                    if self.return_alphas:
+                    if ret_alphas:
                         hyp_alphas.append(new_hyp_alphas[idx])
             hyp_scores = np.array(hyp_scores)
             live_k = new_live_k
@@ -231,14 +254,14 @@ class BeamSearchEnsemble:
             for idx in xrange(live_k):
                 samples.append(hyp_samples[idx])
                 sample_scores.append(hyp_scores[idx])
-                if self.return_alphas:
+                if ret_alphas:
                     sample_alphas.append(hyp_alphas[idx])
-        if self.return_alphas:
+        if ret_alphas:
             return samples, sample_scores, sample_alphas
         else:
             return samples, sample_scores, None
 
-    def predictBeamSearchNet(self):
+    def predictBeamSearchNet(self, ds, parameters={}):
         """
         Approximates by beam search the best predictions of the net on the dataset splits chosen.
         Params from config that affect the sarch process:
@@ -260,6 +283,12 @@ class BeamSearchEnsemble:
             * matchings_init_to_next: dictionary from 'ids_outputs_init' to 'ids_inputs_next'
             * matchings_next_to_next: dictionary from 'ids_outputs_next' to 'ids_inputs_next'
 
+        :param temporally_linked: boolean indicating if the outputs from a sample are the inputs of the following one
+        The following attributes must be inserted to the model when building a temporally_linked model:
+
+            * matchings_sample_to_next_sample:
+            * ids_temporally_linked_inputs:
+
         :returns predictions: dictionary with set splits as keys and matrices of predictions as values.
         """
 
@@ -280,6 +309,8 @@ class BeamSearchEnsemble:
                           'words_so_far': False,
                           'optimized_search': False,
                           'pos_unk': False,
+                          'temporally_linked': False,
+                          'link_index_id': 'link_index',
                           'state_below_index': -1,
                           'search_pruning': False,
                           'normalize_probs': False,
@@ -293,158 +324,241 @@ class BeamSearchEnsemble:
                           'output_min_length_depending_on_x': False,
                           'output_min_length_depending_on_x_factor': 2
                           }
-        params = self.checkParameters(self.params, default_params)
+        params = self.checkParameters(parameters, default_params)
+        # Check if the model is ready for applying an optimized search
+
+        if params['optimized_search']:
+            if 'matchings_init_to_next' not in dir(self) or \
+                            'matchings_next_to_next' not in dir(self) or \
+                            'ids_inputs_init' not in dir(self) or \
+                            'ids_outputs_init' not in dir(self) or \
+                            'ids_inputs_next' not in dir(self) or \
+                            'ids_outputs_next' not in dir(self):
+                raise Exception(
+                    "The following attributes must be inserted to the model when building an optimized search model:\n",
+                    "- matchings_init_to_next\n",
+                    "- matchings_next_to_next\n",
+                    "- ids_inputs_init\n",
+                    "- ids_outputs_init\n",
+                    "- ids_inputs_next\n",
+                    "- ids_outputs_next\n")
+        
+        # Check if the model is ready for applying a temporally_linked search
+        if params['temporally_linked']:
+            if 'matchings_sample_to_next_sample' not in dir(self) or \
+                            'ids_temporally_linked_inputs' not in dir(self):
+                raise Exception(
+                    "The following attributes must be inserted to the model when building a temporally_linked model:\n",
+                    "- matchings_sample_to_next_sample\n",
+                    "- ids_temporally_linked_inputs\n")
+            
         predictions = dict()
+        references = []
+        sources_sampling = []
         for s in params['predict_on_sets']:
             logging.info("\n <<< Predicting outputs of " + s + " set >>>")
-            assert len(params['model_inputs']) > 0, 'We need at least one input!'
-            if not params['optimized_search']:  # use optimized search model if available
-                assert not params['pos_unk'], 'PosUnk is not supported with non-optimized beam search methods'
-            params['pad_on_batch'] = self.dataset.pad_on_batch[params['dataset_inputs'][-1]]
-            # Calculate how many interations are we going to perform
-            if params['n_samples'] < 1:
-                n_samples = eval("self.dataset.len_" + s)
-                num_iterations = int(math.ceil(float(n_samples)))  # / params['batch_size']))
 
-                # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
-                # TODO: We prepare data as model 0... Different data preparators for each model?
-                data_gen = Data_Batch_Generator(s,
-                                                self.models[0],
-                                                self.dataset,
-                                                num_iterations,
-                                                batch_size=1,
-                                                normalization=params['normalize'],
-                                                data_augmentation=False,
-                                                mean_substraction=params['mean_substraction'],
-                                                predict=True).generator()
+            # TODO: enable 'train' sampling on temporally-linked models
+            if params['temporally_linked'] and s == 'train':
+                logging.info('Sampling is currenly not implemented on the "train" set for temporally-linked models.')
+                data_gen = -1
+                data_gen_instance = -1
             else:
-                n_samples = params['n_samples']
-                num_iterations = int(math.ceil(float(n_samples)))  # / params['batch_size']))
+                assert len(params['model_inputs']) > 0, 'We need at least one input!'
+                if not params['optimized_search']:  # use optimized search model if available
+                    assert not params['pos_unk'], 'PosUnk is not supported with non-optimized beam search methods'
 
-                # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
-                data_gen = Data_Batch_Generator(s,
-                                                self.models[0],
-                                                self.dataset,
-                                                num_iterations,
-                                                batch_size=1,
-                                                normalization=params['normalize'],
-                                                data_augmentation=False,
-                                                mean_substraction=params['mean_substraction'],
-                                                predict=False,
-                                                random_samples=n_samples).generator()
-            if params['n_samples'] > 0:
-                references = []
-                sources_sampling = []
-            best_samples = []
-            if params['pos_unk']:
-                best_alphas = []
-                sources = []
+                if params['temporally_linked']:
+                    params['state_below_index'] = 1
+                params['pad_on_batch'] = ds.pad_on_batch[params['dataset_inputs'][params['state_below_index']]]
 
-            total_cost = 0
-            sampled = 0
-            start_time = time.time()
-            eta = -1
-            if self.n_best:
-                n_best_list = []
-            for j in range(num_iterations):
-                data = data_gen.next()
-                X = dict()
+                self.ids_temporally_linked_inputs = self.models[0].ids_temporally_linked_inputs
+                if params['temporally_linked']:
+                    previous_outputs = {}  # variable for storing previous outputs if using a temporally-linked model
+                    for input_id in self.ids_temporally_linked_inputs:
+                        previous_outputs[input_id] = dict()
+                        previous_outputs[input_id][-1] = [ds.extra_words['<null>']]
+
+                # Calculate how many interations are we going to perform
+
+                self.matchings_sample_to_next_sample = self.models[0].matchings_sample_to_next_sample
+                if params['n_samples'] < 1:
+                    n_samples = eval("self.dataset.len_" + s)
+                    num_iterations = int(math.ceil(float(n_samples)))  # / params['batch_size']))
+
+                    # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
+                    # TODO: We prepare data as model 0... Different data preparators for each model?
+                    data_gen_instance = Data_Batch_Generator(s,
+                                                    self.models[0],
+                                                    self.dataset,
+                                                    num_iterations,
+                                                    batch_size=1,
+                                                    normalization=params['normalize'],
+                                                    data_augmentation=False,
+                                                    mean_substraction=params['mean_substraction'],
+                                                    predict=True,
+                                                    temporally_linked=params['temporally_linked'])
+                    data_gen = data_gen_instance.generator()
+                else:
+                    n_samples = params['n_samples']
+                    num_iterations = int(math.ceil(float(n_samples)))  # / params['batch_size']))
+
+                    # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
+                    data_gen_instance = Data_Batch_Generator(s,
+                                                    self.models[0],
+                                                    self.dataset,
+                                                    num_iterations,
+                                                    batch_size=1,
+                                                    normalization=params['normalize'],
+                                                    data_augmentation=False,
+                                                    mean_substraction=params['mean_substraction'],
+                                                    predict=False,
+                                                    random_samples=n_samples,
+                                                    temporally_linked=params['temporally_linked'])
+                    data_gen = data_gen_instance.generator()
                 if params['n_samples'] > 0:
-                    s_dict = {}
-                    for input_id in params['model_inputs']:
-                        X[input_id] = data[0][input_id]
-                        s_dict[input_id] = X[input_id]
-                    sources_sampling.append(s_dict)
+                    references = []
+                    sources_sampling = []
+                best_samples = []
+                if params['pos_unk']:
+                    best_alphas = []
+                    sources = []
 
-                    Y = dict()
-                    for output_id in params['model_outputs']:
-                        Y[output_id] = data[1][output_id]
-                else:
-                    s_dict = {}
-                    for input_id in params['model_inputs']:
-                        X[input_id] = data[input_id]
-                        if params['pos_unk']:
-                            s_dict[input_id] = X[input_id]
-                    if params['pos_unk']:
-                        sources.append(s_dict)
-
-                for i in range(len(X[params['model_inputs'][0]])):
-                    sampled += 1
-                    sys.stdout.write('\r')
-                    sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
-                    sys.stdout.flush()
-                    x = dict()
-                    for input_id in params['model_inputs']:
-                        x[input_id] = np.asarray([X[input_id][i]])
-                    samples, scores, alphas = self.beam_search(x, params, null_sym=self.dataset.extra_words['<null>'])
-
-                    if params['length_penalty'] or params['coverage_penalty']:
-                        if params['length_penalty']:
-                            length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
-                                                 / (5 + 1) ** params['length_norm_factor'])
-                                                # this 5 is a magic number by Google...
-                                                for sample in samples]
-                        else:
-                            length_penalties = [1.0 for _ in len(samples)]
-
-                        if params['coverage_penalty']:
-                            coverage_penalties = []
-                            for k, sample in enumerate(samples):
-                                # We assume that source sentences are at the first position of x
-                                x_sentence = x[params['model_inputs'][0]][0]
-                                alpha = np.asarray(alphas[k])
-                                cp_penalty = 0.0
-                                for cp_i in range(len(x_sentence)):
-                                    att_weight = 0.0
-                                    for cp_j in range(len(sample)):
-                                        att_weight += alpha[cp_j, cp_i]
-                                    cp_penalty += np.log(min(att_weight, 1.0))
-                                coverage_penalties.append(params['coverage_norm_factor'] * cp_penalty)
-                        else:
-                            coverage_penalties = [0.0 for _ in len(samples)]
-                        scores = [co / lp + cp for co, lp, cp in zip(scores, length_penalties, coverage_penalties)]
-
-                    elif params['normalize_probs']:
-                        counts = [len(sample) ** params['alpha_factor'] for sample in samples]
-                        scores = [co / cn for co, cn in zip(scores, counts)]
-
-                    if self.n_best:
-                        n_best_indices = np.argsort(scores)
-                        n_best_scores = np.asarray(scores)[n_best_indices]
-                        n_best_samples = np.asarray(samples)[n_best_indices]
-                        if alphas is not None:
-                            n_best_alphas = [np.stack(alphas[i]) for i in n_best_indices]
-                        else:
-                            n_best_alphas = [None] * len(n_best_indices)
-                        n_best_list.append([n_best_samples, n_best_scores, n_best_alphas])
-                    best_score = np.argmin(scores)
-                    best_sample = samples[best_score]
-                    best_samples.append(best_sample)
-                    if params['pos_unk']:
-                        best_alphas.append(np.asarray(alphas[best_score]))
-                    total_cost += scores[best_score]
-                    eta = (n_samples - sampled) * (time.time() - start_time) / sampled
+                total_cost = 0
+                sampled = 0
+                start_time = time.time()
+                eta = -1
+                if self.n_best:
+                    n_best_list = []
+                for j in range(num_iterations):
+                    data = data_gen.next()
+                    X = dict()
                     if params['n_samples'] > 0:
+                        s_dict = {}
+                        for input_id in params['model_inputs']:
+                            print(input_id)
+                            X[input_id] = data[0][input_id]
+                            s_dict[input_id] = X[input_id]
+                        sources_sampling.append(s_dict)
+
+                        Y = dict()
                         for output_id in params['model_outputs']:
-                            references.append(Y[output_id][i])
+                            Y[output_id] = data[1][output_id]
+                    else:
+                        s_dict = {}
+                        for input_id in params['model_inputs']:
+                            X[input_id] = data[input_id]
+                            if params['pos_unk']:
+                                s_dict[input_id] = X[input_id]
+                        if params['pos_unk']:
+                            sources.append(s_dict)
 
-            sys.stdout.write('Total cost of the translations: %f \t '
-                             'Average cost of the translations: %f\n' % (total_cost, total_cost / n_samples))
-            sys.stdout.write('The sampling took: %f secs (Speed: %f sec/sample)\n' %
-                             ((time.time() - start_time), (time.time() - start_time) / n_samples))
+                    for i in range(len(X[params['model_inputs'][0]])):
+                        sampled += 1
+                        sys.stdout.write('\r')
+                        sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
+                        sys.stdout.flush()
+                        x = dict()
+                        for input_id in params['model_inputs']:
+                            if params['temporally_linked'] and input_id in self.ids_temporally_linked_inputs:
+                                link = int(X[params['link_index_id']][i])
+                                if link not in previous_outputs[input_id].keys():  # input to current sample was not processed yet
+                                    link = -1
+                                prev_x = [ds.vocabulary[input_id]['idx2words'][w] for w in
+                                      previous_outputs[input_id][link]]
+                                x[input_id] = ds.loadText([' '.join(prev_x)], ds.vocabulary[input_id],
+                                                      ds.max_text_len[input_id][s],
+                                                      ds.text_offset[input_id],
+                                                      fill=ds.fill_text[input_id],
+                                                      pad_on_batch=ds.pad_on_batch[input_id],
+                                                      words_so_far=ds.words_so_far[input_id],
+                                                      loading_X=True)[0]
+                            else:
+                                x[input_id] = np.asarray([X[input_id][i]])
+                        samples, scores, alphas = self.beam_search(x,
+                                                                   params,
+                                                                   eos_sym=ds.extra_words['<pad>'],
+                                                                   null_sym=ds.extra_words['<null>'],
+                                                                   return_alphas=params['coverage_penalty'])
 
-            sys.stdout.flush()
-            if self.n_best:
-                if params['pos_unk']:
-                    predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources), n_best_list
+                        if params['length_penalty'] or params['coverage_penalty']:
+                            if params['length_penalty']:
+                                length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
+                                                     / (5 + 1) ** params['length_norm_factor'])
+                                                    # this 5 is a magic number by Google...
+                                                    for sample in samples]
+                            else:
+                                length_penalties = [1.0 for _ in len(samples)]
+
+                            if params['coverage_penalty']:
+                                coverage_penalties = []
+                                for k, sample in enumerate(samples):
+                                    # We assume that source sentences are at the first position of x
+                                    x_sentence = x[params['model_inputs'][0]][0]
+                                    alpha = np.asarray(alphas[k])
+                                    cp_penalty = 0.0
+                                    for cp_i in range(len(x_sentence)):
+                                        att_weight = 0.0
+                                        for cp_j in range(len(sample)):
+                                            att_weight += alpha[cp_j, cp_i]
+                                        cp_penalty += np.log(min(att_weight, 1.0))
+                                    coverage_penalties.append(params['coverage_norm_factor'] * cp_penalty)
+                            else:
+                                coverage_penalties = [0.0 for _ in len(samples)]
+                            scores = [co / lp + cp for co, lp, cp in zip(scores, length_penalties, coverage_penalties)]
+
+                        elif params['normalize_probs']:
+                            counts = [len(sample) ** params['alpha_factor'] for sample in samples]
+                            scores = [co / cn for co, cn in zip(scores, counts)]
+
+                        if self.n_best:
+                            n_best_indices = np.argsort(scores)
+                            n_best_scores = np.asarray(scores)[n_best_indices]
+                            n_best_samples = np.asarray(samples)[n_best_indices]
+                            if alphas is not None:
+                                n_best_alphas = [np.stack(alphas[i]) for i in n_best_indices]
+                            else:
+                                n_best_alphas = [None] * len(n_best_indices)
+                            n_best_list.append([n_best_samples, n_best_scores, n_best_alphas])
+                        best_score = np.argmin(scores)
+                        best_sample = samples[best_score]
+                        best_samples.append(best_sample)
+                        if params['pos_unk']:
+                            best_alphas.append(np.asarray(alphas[best_score]))
+                        total_cost += scores[best_score]
+                        eta = (n_samples - sampled) * (time.time() - start_time) / sampled
+                        if params['n_samples'] > 0:
+                            for output_id in params['model_outputs']:
+                                references.append(Y[output_id][i])
+
+                        # store outputs for temporally-linked models
+                        if params['temporally_linked']:
+                            first_idx = max(0, data_gen_instance.first_idx)
+                            # TODO: Make it more general
+                            for (output_id, input_id) in self.matchings_sample_to_next_sample.iteritems():
+                                # Get all words previous to the padding
+                                previous_outputs[input_id][first_idx + sampled - 1] = best_sample[:sum(
+                                    [int(elem > 0) for elem in best_sample])]
+
+                sys.stdout.write('Total cost of the translations: %f \t '
+                                 'Average cost of the translations: %f\n' % (total_cost, total_cost / n_samples))
+                sys.stdout.write('The sampling took: %f secs (Speed: %f sec/sample)\n' %
+                                 ((time.time() - start_time), (time.time() - start_time) / n_samples))
+
+                sys.stdout.flush()
+                if self.n_best:
+                    if params['pos_unk']:
+                        predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources), n_best_list
+                    else:
+                        predictions[s] = np.asarray(best_samples), n_best_list
                 else:
-                    predictions[s] = np.asarray(best_samples), n_best_list
-            else:
-                if params['pos_unk']:
-                    predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources)
-                else:
-                    predictions[s] = np.asarray(best_samples)
+                    if params['pos_unk']:
+                        predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources)
+                    else:
+                        predictions[s] = np.asarray(best_samples)
 
+        del data_gen
+        del data_gen_instance
         if params['n_samples'] < 1:
             return predictions
         else:
