@@ -1298,12 +1298,13 @@ class Dataset(object):
 
         # Build vocabulary
         error_vocab = False
-        if build_vocabulary:
+        if build_vocabulary == True:
             self.build_vocabulary(sentences, id, tokfun, max_text_len != 0, min_occ=min_occ, n_words=max_words,
                                   use_extra_words=(max_text_len != 0))
         elif isinstance(build_vocabulary, str):
             if build_vocabulary in self.vocabulary:
                 self.vocabulary[id] = self.vocabulary[build_vocabulary]
+                self.vocabulary_len[id] = self.vocabulary_len[build_vocabulary]
                 if not self.silence:
                     logging.info('\tReusing vocabulary named "' + build_vocabulary + '" for data with id "' + id + '".')
             else:
@@ -1891,9 +1892,11 @@ class Dataset(object):
         :param loading_X: Whether we are loading an input or an output of the model
         :return: Text as sequence of number. Mask for each sentence.
         """
+
         vocab = vocabularies['words2idx']
         n_batch = len(X)  # Number of sentences
         # Add an extra dimension
+        X = map(self.detokenize_none_char, X)
         X_out = np.ones((n_batch, max_len, max_word_len)).astype('int32') * self.extra_words['<pad>']
         X_mask = np.zeros((n_batch, max_len, max_word_len)).astype('int8')
 
@@ -1901,16 +1904,16 @@ class Dataset(object):
             x = X[i].strip().split()
             #len_j = sum([1 for j in x if not j[-1]=='@'])  # WORDS. We count all the words not ending with an '@'
             len_j = len(x) # All words are considered a word by themselves
-            if fillChar == 'start':
+            if fill == 'start':
                 offset_j = max_len - len_j
-            elif fillChar == 'center':
+            elif fill == 'center':
                 offset_j = (max_len - len_j) / 2
             else:
                 offset_j = 0
                 len_j = min(len_j, max_len)
 
             if offset_j < 0:
-                if fillChar == 'center': len_j = len_j + offset_j*2
+                if fill == 'center': len_j = len_j + offset_j*2
                 else: len_j = len_j + offset_j
                 offset_j = 0
 
@@ -1923,16 +1926,6 @@ class Dataset(object):
                 # Count BPE components for each word
                 w = w.decode('utf-8')
                 len_c = len(w)
-                '''
-                len_c = 1
-                list_bpe = []
-                list_bpe.append(x[st])
-                while x[st][-1]=='@':
-                    st += 1
-                    list_bpe.append(x[st])
-                    len_c += 1
-                st += 1
-                '''
                 if fillChar == 'start':
                     offset_c = max_word_len - len_c
                 elif fillChar == 'center':
@@ -1946,7 +1939,12 @@ class Dataset(object):
                     else: len_c = len_c + offset_c
                     offset_c = 0
 
+                endBpe = False
                 for idx, chbpe in enumerate(w[:len_c]):  # For each BPE component
+                    if chbpe == '@' and endBpe:
+                        break;
+                    if chbpe == '@':
+                        endBpe = True
                     if chbpe in vocab:
                         ch[idx + offset_c] = vocab[chbpe] #w.decode('utf-8')
                     else:
@@ -2159,7 +2157,7 @@ class Dataset(object):
 
         def convert_chars(x):
             if x == ' ':
-                return '<space>'
+                return '<s>'
             else:
                 return x.encode('utf-8')
 
@@ -2353,7 +2351,7 @@ class Dataset(object):
         """
 
         def deconvert_chars(x):
-            if x == '<space>':
+            if x == '<s>':
                 return ' '
             else:
                 return x.encode('utf-8')
@@ -2367,7 +2365,7 @@ class Dataset(object):
         detokenized = re.sub('\[ ', ' &#91; ', detokenized)
         detokenized = re.sub('\] ', ' &#93; ', detokenized)
         detokenized = re.sub(' ', '', detokenized)
-        detokenized = re.sub('<space>', ' ', detokenized)
+        detokenized = re.sub('<s>', ' ', detokenized)
         return detokenized
 
     # ------------------------------------------------------- #
@@ -3327,7 +3325,6 @@ class Dataset(object):
 
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
-            #print("GET_X = ", (id_in, type_in))
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:
@@ -3419,9 +3416,7 @@ class Dataset(object):
 
         # Recover input samples
         X = []
-        #print("-------------------------------------------------")
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
-            #print("X->GET_XY = ", (id_in, type_in))
             if id_in in self.optional_inputs:
                 try:
                     if surpassed:
@@ -3490,7 +3485,6 @@ class Dataset(object):
         # Recover output samples
         Y = []
         for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
-            #print("Y -> GET_XY = ", (id_in, type_in))
             if surpassed:
                 y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
             else:
@@ -3596,7 +3590,6 @@ class Dataset(object):
         # Recover input samples
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
-            #print("GET_XY_FROM_IND = ", (id_in, type_in))
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:
@@ -3732,7 +3725,6 @@ class Dataset(object):
         # Recover input samples
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
-            #print("GET_X_FROM_IND = ",(id_in, type_in))
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:

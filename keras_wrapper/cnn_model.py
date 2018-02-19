@@ -1870,7 +1870,7 @@ class Model_Wrapper(object):
                 if not params['optimized_search']:  # use optimized search model if available
                     assert not params['pos_unk'], 'PosUnk is not supported with non-optimized beam search methods'
 
-                params['pad_on_batch'] = ds.pad_on_batch[params['dataset_inputs'][params['state_below_index']]]
+                params['pad_on_batch'] = ds.pad_on_batch[params['dataset_inputs'][params['state_below_index']]]#[params['state_below_index']]]
                 if params['temporally_linked']:
                     previous_outputs = {}  # variable for storing previous outputs if using a temporally-linked model
                     for input_id in self.ids_temporally_linked_inputs:
@@ -1977,7 +1977,9 @@ class Model_Wrapper(object):
                             x[input_id] = np.array(X[input_id])
 
                     # Apply beam search
-                    samples_all, scores_all, alphas_all = self.beam_search(x, params, null_sym=ds.extra_words['<null>'])
+                    samples_all, scores_all, alphas_all = self.beam_search(x,
+                                                                           params,
+                                                                           null_sym=ds.extra_words['<null>'])
 
                     # Recover most probable output for each sample
                     for i_sample in range(n_samples_batch):
@@ -2123,6 +2125,7 @@ class Model_Wrapper(object):
                     "The following attributes must be inserted to the model when building a temporally_linked model:\n",
                     "- matchings_sample_to_next_sample\n",
                     "- ids_temporally_linked_inputs\n")
+        print params
         predictions = dict()
         references = []
         sources_sampling = []
@@ -2146,7 +2149,7 @@ class Model_Wrapper(object):
                     previous_outputs = {}  # variable for storing previous outputs if using a temporally-linked model
                     for input_id in self.ids_temporally_linked_inputs:
                         previous_outputs[input_id] = dict()
-                        previous_outputs[input_id][-1] = [ds.vocabulary['description']['words2idx']['.']] #[ds.extra_words['<null>']]
+                        previous_outputs[input_id][-1] = [ds.extra_words['<null>']] #[ds.vocabulary['description']['words2idx']['.']]
 
                 # Calculate how many iterations are we going to perform
                 if params['n_samples'] < 1:
@@ -2157,6 +2160,7 @@ class Model_Wrapper(object):
 
                     num_iterations = int(math.ceil(float(n_samples)))  # / params['max_batch_size']))
                     n_samples = min(eval("ds.len_" + s), num_iterations)  # * params['batch_size'])
+
                     # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
                     data_gen_instance = Data_Batch_Generator(s, self, ds, num_iterations,
                                                              batch_size=1,
@@ -2231,7 +2235,8 @@ class Model_Wrapper(object):
                                     link = -1
                                 prev_x = [ds.vocabulary[input_id]['idx2words'][w] for w in
                                           previous_outputs[input_id][link]]
-                                x[input_id] = ds.loadText([' '.join(prev_x)], ds.vocabulary[input_id],
+                                x[input_id] = ds.loadText([' '.join(prev_x)],
+                                                          ds.vocabulary[input_id],
                                                           ds.max_text_len[input_id][s],
                                                           ds.text_offset[input_id],
                                                           fill=ds.fill_text[input_id],
@@ -2245,7 +2250,6 @@ class Model_Wrapper(object):
                                                                    eos_sym=ds.extra_words['<pad>'],
                                                                    null_sym=ds.extra_words['<null>'],
                                                                    return_alphas=params['coverage_penalty'])
-
                         if params['length_penalty'] or params['coverage_penalty']:
                             if params['length_penalty']:
                                 length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
@@ -2253,7 +2257,7 @@ class Model_Wrapper(object):
                                                     # this 5 is a magic number by Google...
                                                     for sample in samples]
                             else:
-                                length_penalties = [1.0 for _ in len(samples)]
+                                length_penalties = [1.0 for _ in samples]
 
                             if params['coverage_penalty']:
                                 coverage_penalties = []
@@ -2269,7 +2273,7 @@ class Model_Wrapper(object):
                                         cp_penalty += np.log(min(att_weight, 1.0))
                                     coverage_penalties.append(params['coverage_norm_factor'] * cp_penalty)
                             else:
-                                coverage_penalties = [0.0 for _ in len(samples)]
+                                coverage_penalties = [0.0 for _ in samples]
                             scores = [co / lp + cp for co, lp, cp in zip(scores, length_penalties, coverage_penalties)]
 
                         elif params['normalize_probs']:
