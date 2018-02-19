@@ -5,8 +5,6 @@ import time
 
 import numpy as np
 
-from keras.layers.convolutional import ZeroPadding2D
-
 
 def bbox(img, mode='max'):
     """
@@ -244,6 +242,8 @@ def build_Specific_OneVsOneECOC_loss_Stage(net, input, input_shape, classes, eco
     :param activations:
     :return:
     """
+    from keras.layers.convolutional import ZeroPadding2D
+
     n_classes = len(classes)
     if pairs is None:  # generate any possible combination of two classes
         pairs = tuple(itertools.combinations(range(n_classes), 2))
@@ -615,6 +615,35 @@ def indices_2_one_hot(indices, n):
     return one_hot
 
 
+# From keras.utils.np_utils
+def to_categorical(y, num_classes=None):
+    """Converts a class vector (integers) to binary class matrix.
+
+    E.g. for use with categorical_crossentropy.
+
+    # Arguments
+        y: class vector to be converted into a matrix
+            (integers from 0 to num_classes).
+        num_classes: total number of classes.
+
+    # Returns
+        A binary matrix representation of the input.
+    """
+    y = np.array(y, dtype='int')
+    input_shape = y.shape
+    if input_shape and input_shape[-1] == 1 and len(input_shape) > 1:
+        input_shape = tuple(input_shape[:-1])
+    y = y.ravel()
+    if not num_classes:
+        num_classes = np.max(y) + 1
+    n = y.shape[0]
+    categorical = np.zeros((n, num_classes))
+    categorical[np.arange(n), y] = 1
+    output_shape = input_shape + (num_classes,)
+    categorical = np.reshape(categorical, output_shape)
+    return categorical
+
+
 # ------------------------------------------------------- #
 #       DECODING FUNCTIONS
 #           Functions for decoding predictions
@@ -789,9 +818,7 @@ def decode_predictions_beam_search(preds, index2word, alphas=None, heuristic=0,
 
     if alphas is not None:
         x_text = map(lambda x: x.split(), x_text)
-        hard_alignments = map(
-            lambda alignment, x_sentence: np.argmax(alignment[:, :max(1, len(x_sentence))], axis=1),
-            alphas, x_text)
+        hard_alignments = map(lambda alignment, x_sentence: np.argmax(alignment[:, :max(1, len(x_sentence))], axis=1), alphas, x_text)
         for i, a_no in enumerate(flattened_answer_pred):
             if unk_symbol in a_no:
                 if verbose > 1:

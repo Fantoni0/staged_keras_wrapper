@@ -27,27 +27,6 @@ class BeamSearchEnsemble:
         self.return_alphas = params_prediction.get('coverage_penalty', False) or params_prediction.get('pos_unk', False)
         self.n_best = n_best
         self.verbose = verbose
-
-        # # Inputs and outputs names for models of class Model
-        # self.ids_inputs = list()
-        # self.ids_outputs = list()
-        #
-        # # Inputs and outputs names for models for optimized search
-        # self.ids_inputs_init = list()
-        # self.ids_outputs_init = list()
-        # self.ids_inputs_next = list()
-        # self.ids_outputs_next = list()
-        #
-        # # Matchings from model_init to mode_next:
-        # self.matchings_init_to_next = None
-        # self.matchings_next_to_next = None
-        #
-        # # Inputs and outputs names for models with temporally linked samples
-        # self.ids_temporally_linked_inputs = list()
-        #
-        # # Matchings between temporally linked samples
-        # self.matchings_sample_to_next_sample = None
-
         if self.verbose > 0:
             logging.info('<<< "Optimized search: %s >>>' % str(self.optimized_search))
 
@@ -163,7 +142,8 @@ class BeamSearchEnsemble:
         for ii in xrange(maxlen):
             # for every possible live sample calc prob for every possible label
             if self.optimized_search:  # use optimized search model if available
-                [probs, prev_outs, alphas] = self.predict_cond(self.models, X, state_below, params, ii, prev_outs=prev_outs)
+                [probs, prev_outs, alphas] = self.predict_cond(self.models, X, state_below, params, ii,
+                                                               prev_outs=prev_outs)
             else:
                 probs = self.predict_cond(self.models, X, state_below, params, ii)
             log_probs = np.log(probs)
