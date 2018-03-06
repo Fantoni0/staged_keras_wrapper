@@ -383,6 +383,7 @@ class Model_Wrapper(object):
         self.training_parameters = []
         self.testing_parameters = []
         self.training_state = dict()
+        self._dynamic_display = True
 
         # Dictionary for storing any additional data needed
         self.additional_data = dict()
@@ -464,6 +465,10 @@ class Model_Wrapper(object):
             for d in compulsory_data_types:
                 if d not in self.__data_types:
                     self.__data_types.append(d)
+
+        self._dynamic_display = ((hasattr(sys.stdout, 'isatty') and
+                                  sys.stdout.isatty()) or
+                                 'ipykernel' in sys.modules)
 
         self.__modes = ['train', 'val', 'test']
 
@@ -1101,7 +1106,7 @@ class Model_Wrapper(object):
         # Train model
         self.model.fit(x,
                        y,
-                       batch_size=min(params['batch_size'], len(x)),
+                       batch_size=min(params['batch_size'], len(x[0])),
                        epochs=params['n_epochs'],
                        verbose=params['verbose'],
                        callbacks=callbacks,
@@ -1989,8 +1994,12 @@ class Model_Wrapper(object):
 
                     # Count processed samples
                     n_samples_batch = len(X[params['model_inputs'][0]])
-                    sys.stdout.write('\r')
                     sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled + n_samples_batch, n_samples, int(eta)))
+                    if not hasattr(self, '_dynamic_display') or self._dynamic_display:
+                        sys.stdout.write('\r')
+                    else:
+                        sys.stdout.write('\n')
+
                     sys.stdout.flush()
                     x = dict()
 
@@ -2037,8 +2046,7 @@ class Model_Wrapper(object):
                         if params['pos_unk']:
                             best_alphas.append(np.asarray(alphas[best_score]))
                         total_cost += scores[best_score]
-                        eta = (n_samples - sampled + i_sample + 1) * (time.time() - start_time) / (
-                            sampled + i_sample + 1)
+                        eta = (n_samples - sampled + i_sample + 1) * (time.time() - start_time) / (sampled + i_sample + 1)
                         if params['n_samples'] > 0:
                             for output_id in params['model_outputs']:
                                 references.append(Y[output_id][i_sample])
@@ -2136,7 +2144,7 @@ class Model_Wrapper(object):
                           'output_max_length_depending_on_x': False,
                           'output_max_length_depending_on_x_factor': 3,
                           'output_min_length_depending_on_x': False,
-                          'output_min_length_depending_on_x_factor': 2
+                          'output_min_length_depending_on_x_factor': 2,
                           }
 
         params = self.checkParameters(parameters, default_params)
@@ -2260,8 +2268,13 @@ class Model_Wrapper(object):
 
                     for i in range(len(X[params['model_inputs'][0]])):  # process one sample at a time
                         sampled += 1
-                        sys.stdout.write('\r')
+
                         sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
+                        if not hasattr(self, '_dynamic_display') or self._dynamic_display:
+                            sys.stdout.write('\r')
+                        else:
+                            sys.stdout.write('\n')
+
                         sys.stdout.flush()
                         x = dict()
 
@@ -2389,9 +2402,13 @@ class Model_Wrapper(object):
                           'final_sample': -1,
                           'verbose': 1,
                           'predict_on_sets': ['val'],
-                          'max_eval_samples': None
+                          'max_eval_samples': None,
+                          'model_name': 'model', # name of the attribute where the model for prediction is stored
                           }
         params = self.checkParameters(parameters, default_params)
+
+        exec('model_predict = self.'+params['model_name']) # recover model for prediction
+
         predictions = dict()
         for s in params['predict_on_sets']:
             predictions[s] = []
@@ -2440,14 +2457,14 @@ class Model_Wrapper(object):
             if postprocess_fun is None:
                 if int(keras.__version__.split('.')[0]) == 1:
                     # Keras version 1.x
-                    out = self.model.predict_generator(data_gen,
+                    out = model_predict.predict_generator(data_gen,
                                                        val_samples=n_samples,
                                                        max_q_size=params['n_parallel_loaders'],
                                                        nb_worker=1,  # params['n_parallel_loaders'],
                                                        pickle_safe=False)
                 else:
                     # Keras version 2.x
-                    out = self.model.predict_generator(data_gen,
+                    out = model_predict.predict_generator(data_gen,
                                                        num_iterations,
                                                        max_queue_size=params['n_parallel_loaders'],
                                                        workers=1,  # params['n_parallel_loaders'],
@@ -2457,7 +2474,7 @@ class Model_Wrapper(object):
                 processed_samples = 0
                 start_time = time.time()
                 while processed_samples < n_samples:
-                    out = self.model.predict_on_batch(data_gen.next())
+                    out = model_predict.predict_on_batch(data_gen.next())
 
                     # Apply post-processing function
                     if isinstance(postprocess_fun, list):
@@ -2471,9 +2488,13 @@ class Model_Wrapper(object):
                     processed_samples += params['batch_size']
                     if processed_samples > n_samples:
                         processed_samples = n_samples
+
                     eta = (n_samples - processed_samples) * (time.time() - start_time) / processed_samples
-                    sys.stdout.write('\r')
                     sys.stdout.write("Predicting %d/%d  -  ETA: %ds " % (processed_samples, n_samples, int(eta)))
+                    if not hasattr(self, '_dynamic_display') or self._dynamic_display:
+                        sys.stdout.write('\r')
+                    else:
+                        sys.stdout.write('\n')
                     sys.stdout.flush()
 
         return predictions

@@ -221,10 +221,6 @@ class Data_Batch_Generator(object):
                                                           meanSubstraction=self.params['mean_substraction'],
                                                           dataAugmentation=data_augmentation)
                     data = self.net.prepareData(X_batch, Y_batch)
-
-            #print(X_batch)
-            #for b in X_batch:
-            #    print("DATA_B_GEN= ", map(lambda x: ' '.join(map(self.dataset.vocabulary['source_text']['idx2words'].get, filter(lambda y: y!=0, x.reshape(-1)))), b))
             yield (data)
 
 
@@ -437,6 +433,7 @@ class Dataset(object):
         self.__accepted_types_inputs = ['raw-image', 'image-features',
                                         'video', 'video-features',
                                         'text',
+                                        'categorical', 'binary',
                                         'id', 'ghost', 'file-name']
         self.__accepted_types_outputs = ['categorical', 'binary',
                                          'real',
@@ -778,6 +775,12 @@ class Dataset(object):
             self.inputs_data_augmentation_types[id] = data_augmentation_types
             data = self.preprocessVideoFeatures(path_list, id, set_name, max_video_len, img_size, img_size_crop,
                                                 feat_len)
+        elif type == 'categorical':
+            self.setClasses(path_list, id)
+            data = self.preprocessCategorical(path_list, id,
+                                              sample_weights=True if sample_weights and set_name == 'train' else False)
+        elif type == 'binary':
+            data = self.preprocessBinary(path_list, id, sparse)
         elif type == 'id':
             data = self.preprocessIDs(path_list, id, set_name)
         elif type == 'ghost':
@@ -3282,7 +3285,7 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = eval('self.X_' + set_name + '[id_in][init:final]')
-            #print("get_X: ",id_in, x)
+
             if not debug and not ghost_x:
                 if type_in == 'raw-image':
                     daRandomParams = None
@@ -3320,15 +3323,12 @@ class Dataset(object):
                     x = self.loadVideoFeatures(x, id_in, set_name, self.max_video_len[id_in],
                                                normalization_type, normalization, self.features_lengths[id_in],
                                                data_augmentation=dataAugmentation)
-            '''                    
-            if id_in == 'link_index':
-                print(x)
-            elif id_in == 'state_below' or id_in=='prev_sentence':
-                print(map(lambda y: ' '.join(map(self.vocabulary['description']['idx2words'].get, filter(lambda z:z!=0, y))), x))
-            else:
-                print(map(lambda y: ' '.join(
-                    map(self.vocabulary['source_text']['idx2words'].get, filter(lambda z: z != 0, y))), x))
-            '''
+                elif type_in == 'categorical':
+                    nClasses = len(self.dic_classes[id_in])
+                    # load_sample_weights = self.sample_weights[id_out][set_name]
+                    x = self.loadCategorical(x, nClasses)
+                elif type_in == 'binary':
+                    x = self.loadBinary(x, id_in)
             X.append(x)
 
         return X
@@ -3380,7 +3380,7 @@ class Dataset(object):
                         'self.X_' + set_name + '[id_in][0:new_last]')
                 else:
                     x = eval('self.X_' + set_name + '[id_in][last:new_last]')
-            #print("get_XY_X: ", id_in, x)
+
             # Pre-process inputs
             if not debug:
                 if type_in == 'raw-image':
@@ -3420,15 +3420,12 @@ class Dataset(object):
                     x = self.loadVideoFeatures(x, id_in, set_name, self.max_video_len[id_in], normalization_type,
                                                normalization, self.features_lengths[id_in],
                                                data_augmentation=dataAugmentation)
-            '''
-            if id_in == 'link_index':
-                print(x)
-            elif id_in == 'state_below' or id_in=='prev_sentence':
-                print(map(lambda y: ' '.join(map(self.vocabulary['description']['idx2words'].get, filter(lambda z:z!=0, y))), x))
-            else:
-                print(map(lambda y: ' '.join(
-                    map(self.vocabulary['source_text']['idx2words'].get, filter(lambda z: z != 0, y))), x))
-            '''
+                elif type_in == 'categorical':
+                    nClasses = len(self.dic_classes[id_in])
+                    # load_sample_weights = self.sample_weights[id_out][set_name]
+                    x = self.loadCategorical(x, nClasses)
+                elif type_in == 'binary':
+                    x = self.loadBinary(x, id_in)
             X.append(x)
 
         # Recover output samples
@@ -3438,7 +3435,7 @@ class Dataset(object):
                 y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
             else:
                 y = eval('self.Y_' + set_name + '[id_out][last:new_last]')
-            #print("get_XY_Y: ", id_in, y)
+
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':
@@ -3494,9 +3491,6 @@ class Dataset(object):
                     y = (y[0][:, :, None], y[1])
 
             Y.append(y)
-
-        if debug:
-            return [X, Y, [new_last, last, surpassed]]
 
         return [X, Y]
 
@@ -3583,6 +3577,12 @@ class Dataset(object):
                     x = self.loadVideoFeatures(x, id_in, set_name, self.max_video_len[id_in],
                                                normalization_type, normalization, self.features_lengths[id_in],
                                                data_augmentation=dataAugmentation)
+                elif type_in == 'categorical':
+                    nClasses = len(self.dic_classes[id_in])
+                    # load_sample_weights = self.sample_weights[id_out][set_name]
+                    x = self.loadCategorical(x, nClasses)
+                elif type_in == 'binary':
+                    x = self.loadBinary(x, id_in)
             X.append(x)
 
         # Recover output samples
@@ -3622,6 +3622,7 @@ class Dataset(object):
                                       self.max_text_len[id_out][set_name], self.text_offset[id_out], # self.max_word_len[id_out][set_name],
                                       fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
                                       words_so_far=self.words_so_far[id_out], loading_X=False)
+
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
                         y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
@@ -3728,6 +3729,12 @@ class Dataset(object):
                     x = self.loadVideoFeatures(x, id_in, set_name, self.max_video_len[id_in],
                                                normalization_type, normalization, self.features_lengths[id_in],
                                                data_augmentation=dataAugmentation)
+                elif type_in == 'categorical':
+                    nClasses = len(self.dic_classes[id_in])
+                    # load_sample_weights = self.sample_weights[id_out][set_name]
+                    x = self.loadCategorical(x, nClasses)
+                elif type_in == 'binary':
+                    x = self.loadBinary(x, id_in)
             X.append(x)
 
         return X

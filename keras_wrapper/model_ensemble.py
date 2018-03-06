@@ -27,6 +27,10 @@ class BeamSearchEnsemble:
         self.return_alphas = params_prediction.get('coverage_penalty', False) or params_prediction.get('pos_unk', False)
         self.n_best = n_best
         self.verbose = verbose
+
+        self._dynamic_display = ((hasattr(sys.stdout, 'isatty') and
+                                  sys.stdout.isatty()) or
+                                 'ipykernel' in sys.modules)
         if self.verbose > 0:
             logging.info('<<< "Optimized search: %s >>>' % str(self.optimized_search))
 
@@ -416,6 +420,10 @@ class BeamSearchEnsemble:
                         sampled += 1
                         sys.stdout.write('\r')
                         sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
+                        if not hasattr(self, '_dynamic_display') or self._dynamic_display:
+                            sys.stdout.write('\r')
+                        else:
+                            sys.stdout.write('\n')
                         sys.stdout.flush()
                         x = dict()
                         for input_id in params['model_inputs']:
