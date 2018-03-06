@@ -784,6 +784,7 @@ class Model_Wrapper(object):
                           'lr_reducer_exp_base': 0.5,
                           'lr_half_life': 50000,
                           'tensorboard': False,
+                          'temporally_linked': False,
                           'tensorboard_params': {'log_dir': 'tensorboard_logs',
                                                  'histogram_freq': 0,
                                                  'batch_size': 50,
@@ -862,6 +863,7 @@ class Model_Wrapper(object):
                           'lr_reducer_type': 'linear',
                           'lr_reducer_exp_base': 0.5,
                           'lr_half_life': 50000,
+                          'temporally_linked': False,
                           'tensorboard': False,
                           'tensorboard_params': {'log_dir': 'tensorboard_logs',
                                                  'histogram_freq': 0,
@@ -991,7 +993,8 @@ class Model_Wrapper(object):
                                              normalization_type=params['normalization_type'],
                                              data_augmentation=params['data_augmentation'],
                                              mean_substraction=params['mean_substraction'],
-                                             shuffle=params['shuffle']).generator()
+                                             shuffle=params['shuffle'],
+                                             temporally_linked=params['temporally_linked']).generator()
 
         # Are we going to validate on 'val' data?
         if 'val' in params['eval_on_sets']:
@@ -1007,7 +1010,8 @@ class Model_Wrapper(object):
                                            normalization_type=params['normalization_type'],
                                            data_augmentation=False,
                                            mean_substraction=params['mean_substraction'],
-                                           shuffle=False).generator()
+                                           shuffle=False,
+                                           temporally_linked=params['temporally_linked']).generator()
         else:
             val_gen = None
             n_valid_samples = None
@@ -2267,7 +2271,7 @@ class Model_Wrapper(object):
                                 if link not in previous_outputs[input_id].keys():
                                     # input to current sample was not processed yet
                                     link = -1
-                                prev_x = [ds.vocabulary[input_id]['idx2words'][w] for w in
+                                prev_x = [ds.vocabulary[input_id]['idx2words'].get(w, '<unk>') for w in
                                           previous_outputs[input_id][link]]
                                 x[input_id] = ds.loadText([' '.join(prev_x)], ds.vocabulary[input_id],
                                                           ds.max_text_len[input_id][s],
@@ -2278,6 +2282,9 @@ class Model_Wrapper(object):
                                                           loading_X=True)[0]
                             else:
                                 x[input_id] = np.asarray([X[input_id][i]])
+
+                            #print(""+input_id+" :", " ".join([ds.vocabulary[input_id]['idx2words'][w] for w in X[input_id][i]]))
+                        #print('--------------------------')
                         samples, scores, alphas = self.beam_search(x,
                                                                    params,
                                                                    eos_sym=ds.extra_words['<pad>'],

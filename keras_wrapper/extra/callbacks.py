@@ -275,7 +275,7 @@ class EvalPerformance(KerasCallback):
                                      self.beam_batch_size is not None else self.batch_size,
                                      'pos_unk': False,
                                      'normalize': self.normalize,
-                                     'max_eval_samples': self.max_eval_samples
+                                     'max_eval_samples': self.max_eval_samples,
                                      }
 
                 params_prediction.update(checkDefaultParamsBeamSearch(self.extra_vars))

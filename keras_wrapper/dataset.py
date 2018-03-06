@@ -11,22 +11,14 @@ import sys
 import threading
 from collections import Counter
 from operator import add
-import time
-
 import numpy as np
-from PIL import Image as pilimage
-from scipy import ndimage, misc
-from skimage import transform
-
 from extra.read_write import create_dir_if_not_exists
-from keras.utils import np_utils
-from .utils import bbox
-from .utils import one_hot_2_indices
+from extra.tokenizers import *
+from .utils import bbox, to_categorical
 
 
 # ------------------------------------------------------- #
 #       SAVE/LOAD
-#           External functions for saving and loading Dataset instances
 #           External functions for saving and loading Dataset instances
 # ------------------------------------------------------- #
 
@@ -158,6 +150,7 @@ class Data_Batch_Generator(object):
                 final_sample = n_samples_split
                 batch_size = final_sample - init_sample
                 it = 0
+
             # Recovers a batch of data
             if self.params['random_samples'] > 0:
                 num_retrieve = min(self.params['random_samples'], self.params['batch_size'])
@@ -277,8 +270,8 @@ class Homogeneous_Data_Batch_Generator(object):
         self.batch_size = batch_size
         self.it = 0
 
-        self.X_batch = None
-        self.Y_batch = None
+        self.X_maxibatch = None
+        self.Y_maxibatch = None
         self.tidx = None
         self.curr_idx = None
         self.batch_idx = None
@@ -294,7 +287,7 @@ class Homogeneous_Data_Batch_Generator(object):
                        'joint_batches': joint_batches}
         self.reset()
 
-    def retrieve_batch(self):
+    def retrieve_maxibatch(self):
 
         if self.set_split == 'train' and not self.predict:
             data_augmentation = self.params['data_augmentation']
@@ -329,37 +322,15 @@ class Homogeneous_Data_Batch_Generator(object):
                                               meanSubstraction=self.params['mean_substraction'],
                                               dataAugmentation=data_augmentation)
 
-        self.X_batch = X_batch
-        self.Y_batch = Y_batch
+        self.X_maxibatch = X_batch
+        self.Y_maxibatch = Y_batch
 
     def reset(self):
-        self.retrieve_batch()
-        text_Y_batch = self.Y_batch[0][1]  # just use mask
+        self.retrieve_maxibatch()
+        text_Y_batch = self.Y_maxibatch[0][1]  # just use mask
         batch_lengths = np.asarray([int(np.sum(cc)) for cc in text_Y_batch])
         self.tidx = batch_lengths.argsort()
         self.curr_idx = 0
-
-    def get_data(self):
-        new_X = []
-        new_Y = []
-        next_idx = min(self.curr_idx + self.batch_size, len(self.tidx))
-        self.batch_tidx = self.tidx[self.curr_idx:next_idx]
-
-        for x_input_idx in range(len(self.X_batch)):
-            x_to_add = [self.X_batch[x_input_idx][i] for i in self.batch_tidx]
-            new_X.append(np.asarray(x_to_add))
-        for y_input_idx in range(len(self.Y_batch)):
-            Y_batch_ = []
-            for data_mask_idx in range(len(self.Y_batch[y_input_idx])):
-                y_to_add = np.asarray([self.Y_batch[y_input_idx][data_mask_idx][i] for i in self.batch_tidx])
-                Y_batch_.append(y_to_add)
-            new_Y.append(tuple(Y_batch_))
-
-        data = self.net.prepareData(new_X, new_Y)
-        self.curr_idx = next_idx
-        if self.curr_idx >= len(self.tidx):
-            self.reset()
-        return data
 
     def generator(self):
         """
@@ -367,7 +338,25 @@ class Homogeneous_Data_Batch_Generator(object):
         :return: generator with the data
         """
         while True:
-            yield self.get_data()
+            new_X = []
+            new_Y = []
+            next_idx = min(self.curr_idx + self.batch_size, len(self.tidx))
+            self.batch_tidx = self.tidx[self.curr_idx:next_idx]
+            for x_input_idx in range(len(self.X_maxibatch)):
+                x_to_add = [self.X_maxibatch[x_input_idx][i] for i in self.batch_tidx]
+                new_X.append(np.asarray(x_to_add))
+
+            for y_input_idx in range(len(self.Y_maxibatch)):
+                Y_batch_ = []
+                for data_mask_idx in range(len(self.Y_maxibatch[y_input_idx])):
+                    y_to_add = np.asarray([self.Y_maxibatch[y_input_idx][data_mask_idx][i] for i in self.batch_tidx])
+                    Y_batch_.append(y_to_add)
+                new_Y.append(tuple(Y_batch_))
+            data = self.net.prepareData(new_X, new_Y)
+            self.curr_idx = next_idx
+            if self.curr_idx >= len(self.tidx):
+                self.reset()
+            yield (data)
 
 
 # ------------------------------------------------------- #
@@ -451,7 +440,7 @@ class Dataset(object):
                                         'id', 'ghost', 'file-name']
         self.__accepted_types_outputs = ['categorical', 'binary',
                                          'real',
-                                         'text',
+                                         'text', 'dense_text',  # TODO: Document dense_text type!
                                          '3DLabel', '3DSemanticLabel',
                                          'id', 'file-name']
         #    inputs/outputs with type 'id' are only used for storing external identifiers for your data
@@ -483,6 +472,10 @@ class Dataset(object):
         self.BPE = None  # Byte Pair Encoding instance
         self.BPE_separator = None
         self.BPE_built = False
+        self.moses_tokenizer = None
+        self.moses_detokenizer = False
+        self.moses_tokenizer_built = None
+        self.moses_detokenizer_built = False
         #################################################
 
         # Parameters used for inputs of type 'video' or 'video-features'
@@ -764,7 +757,7 @@ class Dataset(object):
             data = self.preprocessImages(path_list, id, set_name, img_size, img_size_crop, use_RGB)
         elif type == 'video':
             data = self.preprocessVideos(path_list, id, set_name, max_video_len, img_size, img_size_crop)
-        elif type == 'text':
+        elif type == 'text' or type == 'dense_text':
             if self.max_text_len.get(id) is None:
                 self.max_text_len[id] = dict()
             if self.max_word_len.get(id) is None:
@@ -872,7 +865,7 @@ class Dataset(object):
             logging.info('Loaded "' + set_name + '" set inputs of type "' + type + '" with id "' + id + '".')
 
     def setOutput(self, path_list, set_name, type='categorical', id='label', repeat_set=1, overwrite_split=False,
-                  sample_weights=False, tokenization='tokenize_none', max_text_len=0, offset=0, fill='end',
+                  add_additional=False, sample_weights=False, tokenization='tokenize_none', max_text_len=0, offset=0, fill='end',
                   fill_char='end', min_occ=0, pad_on_batch=True, words_so_far=False, build_vocabulary=False,
                   bpe_codes=None, separator='@@', max_words=0, max_word_len=0, char_bpe=False, associated_id_in=None,
                   num_poolings=None, sparse=False):
@@ -946,7 +939,7 @@ class Dataset(object):
             self.setClasses(path_list, id)
             data = self.preprocessCategorical(path_list, id,
                                               sample_weights=True if sample_weights and set_name == 'train' else False)
-        elif type == 'text':
+        elif type == 'text' or type == 'dense_text':
             if self.max_text_len.get(id) is None:
                 self.max_text_len[id] = dict()
                 self.max_word_len[id] = dict()
@@ -968,13 +961,16 @@ class Dataset(object):
         if self.sample_weights.get(id) is None:
             self.sample_weights[id] = dict()
         self.sample_weights[id][set_name] = sample_weights
-        self.__setOutput(data, set_name, type, id, overwrite_split)
+        self.__setOutput(data, set_name, type, id, overwrite_split, add_additional)
 
-    def __setOutput(self, labels, set_name, type, id, overwrite_split):
-        exec ('self.Y_' + set_name + '[id] = labels')
+    def __setOutput(self, labels, set_name, type, id, overwrite_split, add_additional):
+        if add_additional:
+            exec ('self.Y_' + set_name + '[id] += labels')
+        else:
+            exec ('self.Y_' + set_name + '[id] = labels')
         exec ('self.loaded_' + set_name + '[1] = True')
-        exec ('self.len_' + set_name + ' = len(labels)')
-        if not overwrite_split:
+        exec ('self.len_' + set_name + ' = len(self.Y_' + set_name + '[id])')
+        if not overwrite_split and not add_additional:
             self.__checkLengthSet(set_name)
 
         if not self.silence:
@@ -1068,7 +1064,7 @@ class Dataset(object):
 
     @staticmethod
     def loadCategorical(y_raw, nClasses):
-        y = np_utils.to_categorical(y_raw, nClasses).astype(np.uint8)
+        y = to_categorical(y_raw, nClasses).astype(np.uint8)
         return y
 
     # ------------------------------------------------------- #
@@ -1420,7 +1416,6 @@ class Dataset(object):
             for w, k in self.extra_words.iteritems():
                 dictionary[w] = k
 
-
         # Store dictionary and append to previously existent if needed.
         if id not in self.vocabulary:
             self.vocabulary[id] = dict()
@@ -1505,6 +1500,50 @@ class Dataset(object):
         self.BPE_separator = separator
         self.BPE_built = True
 
+    def build_moses_tokenizer(self, language='en'):
+        """
+        Constructs a Moses tokenizer instance.
+        :param language: Tokenizer language.
+        :return: None
+        """
+        import nltk
+        try:
+            nltk.data.find('misc/perluniprops')
+        except LookupError:
+            nltk.download('perluniprops')
+        try:
+            nltk.data.find('corpora/nonbreaking_prefixes')
+        except LookupError:
+            nltk.download('nonbreaking_prefixes')
+        from nltk.tokenize.moses import MosesTokenizer
+
+        self.moses_tokenizer = MosesTokenizer(lang=language)
+        self.moses_tokenizer_built = True
+
+    def build_moses_detokenizer(self, language='en'):
+        """
+        Constructs a BPE encoder instance. Currently, vocabulary and glossaries options are not implemented.
+        :param codes: File with BPE codes (created by learn_bpe.py)
+        :param separator: Separator between non-final subword units (default: '@@'))
+        :param vocabulary: Vocabulary file. If provided, this script reverts any merge operations that produce an OOV.
+        :param glossaries: The strings provided in glossaries will not be affected
+                           by the BPE (i.e. they will neither be broken into subwords,
+                           nor concatenated with other subwords.
+        :return: None
+        """
+        import nltk
+        try:
+            nltk.data.find('misc/perluniprops')
+        except LookupError:
+            nltk.download('perluniprops')
+        try:
+            nltk.data.find('corpora/nonbreaking_prefixes')
+        except LookupError:
+            nltk.download('nonbreaking_prefixes')
+        from nltk.tokenize.moses import MosesDetokenizer
+        self.moses_detokenizer = MosesDetokenizer(lang=language)
+        self.moses_detokenizer_built = True
+
     @staticmethod
     def load3DLabels(bbox_list, nClasses, dataAugmentation, daRandomParams, img_size, size_crop, image_list):
         """
@@ -1519,6 +1558,7 @@ class Dataset(object):
         :param image_list: list of input images used as identifiers to 'daRandomParams'
         :return: 3DLabels with shape (batch_size, width*height, classes)
         """
+        from scipy import misc
 
         n_samples = len(bbox_list)
         h, w, d = img_size
@@ -1601,6 +1641,8 @@ class Dataset(object):
         :param image_list: list of input images used as identifiers to 'daRandomParams'
         :return: 3DSemanticLabels with shape (batch_size, width*height, classes)
         """
+        from PIL import Image as pilimage
+        from scipy import misc
 
         n_samples = len(labeled_images_list)
         h, w, d = img_size
@@ -1709,8 +1751,22 @@ class Dataset(object):
         """
         vocab = vocabularies['words2idx']
         n_batch = len(X)
+
+        # Max values per uint type:
+        # uint8.max: 255
+        # uint16.max: 65535
+        # uint32.max: 4294967295
+        vocabulary_size = len(vocab.keys())
+
+        if vocabulary_size < 255:
+            dtype_text = 'uint8'
+        elif vocabulary_size < 65535:
+            dtype_text = 'uint16'
+        else:
+            dtype_text = 'uint32'
+
         if max_len == 0:  # use whole sentence as class
-            X_out = np.zeros(n_batch).astype('int32')
+            X_out = np.zeros(n_batch).astype(dtype_text)
             for i in range(n_batch):
                 w = X[i]
                 if '<unk>' in vocab:
@@ -1726,14 +1782,14 @@ class Dataset(object):
                 max_len_batch = max_len
 
             if words_so_far:
-                X_out = np.ones((n_batch, max_len_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                X_out = np.ones((n_batch, max_len_batch, max_len_batch)).astype(dtype_text) * self.extra_words['<pad>']
                 X_mask = np.zeros((n_batch, max_len_batch, max_len_batch)).astype('int8')
-                null_row = np.ones((1, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                null_row = np.ones((1, max_len_batch)).astype(dtype_text) * self.extra_words['<pad>']
                 zero_row = np.zeros((1, max_len_batch)).astype('int8')
                 if offset > 0:
                     null_row[0] = np.append([vocab['<null>']] * offset, null_row[0, :-offset])
             else:
-                X_out = np.ones((n_batch, max_len_batch)).astype('int32') * self.extra_words['<pad>']
+                X_out = np.ones((n_batch, max_len_batch)).astype(dtype_text) * self.extra_words['<pad>']
                 X_mask = np.zeros((n_batch, max_len_batch)).astype('int8')
 
             if max_len_batch == max_len:
@@ -1778,7 +1834,7 @@ class Dataset(object):
                     else:
                         X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
                         X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
-            X_out = (X_out, X_mask)
+            X_out = (np.asarray(X_out, dtype=dtype_text), np.asarray(X_mask, dtype='int8'))
         return X_out
 
     def loadTextCharacter(self, X, vocabularies, max_len, max_word_len, fill, fillChar, pad_on_batch, loading_X=False):
@@ -1981,12 +2037,12 @@ class Dataset(object):
                           words_so_far, loading_X=loading_X)
         # Use whole sentence as class (classifier model)
         if max_len == 0:
-            y_aux = np_utils.to_categorical(y, vocabulary_len).astype(np.uint8)
+            y_aux = to_categorical(y, vocabulary_len).astype(np.uint8)
         # Use words separately (generator model)
         else:
             y_aux = np.zeros(list(y[0].shape) + [vocabulary_len]).astype(np.uint8)
             for idx in range(y[0].shape[0]):
-                y_aux[idx] = np_utils.to_categorical(y[0][idx], vocabulary_len).astype(
+                y_aux[idx] = to_categorical(y[0][idx], vocabulary_len).astype(
                     np.uint8)
             if sample_weights:
                 y_aux = (y_aux, y[1])  # join data and mask
@@ -2019,22 +2075,7 @@ class Dataset(object):
         :param lowercase: Whether to lowercase the caption or not
         :return: Tokenized version of caption
         """
-
-        punct = ['.', ';', r"/", '[', ']', '"', '{', '}', '(', ')', '=', '+', '\\', '_', '-', '>', '<', '@', '`', ',',
-                 '?', '!']
-
-        def processPunctuation(inText):
-            outText = inText
-            for p in punct:
-                outText = outText.replace(p, ' ' + p + ' ')
-            return outText
-
-        resAns = caption.lower() if lowercase else caption
-        resAns = resAns.replace('\n', ' ')
-        resAns = resAns.replace('\t', ' ')
-        resAns = processPunctuation(resAns)
-        resAns = resAns.replace('  ', ' ')
-        return resAns
+        return tokenize_basic(caption, lowercase=lowercase)
 
     @staticmethod
     def tokenize_aggressive(caption, lowercase=True):
@@ -2047,21 +2088,7 @@ class Dataset(object):
         :param lowercase: Whether to lowercase the caption or not
         :return: Tokenized version of caption
         """
-        punct = ['.', ';', r"/", '[', ']', '"', '{', '}', '(', ')',
-                 '=', '+', '\\', '_', '-', '>', '<', '@', '`', ',', '?', '!',
-                 '¿', '¡', '\n', '\t', '\r']
-
-        def processPunctuation(inText):
-            outText = inText
-            for p in punct:
-                outText = outText.replace(p, '')
-            return outText
-
-        resAns = caption.lower() if lowercase else caption
-        resAns = processPunctuation(resAns)
-        resAns = re.sub('[  ]+', ' ', resAns)
-        resAns = resAns.strip()
-        return resAns
+        return tokenize_aggressive(caption, lowercase=lowercase)
 
     @staticmethod
     def tokenize_icann(caption):
@@ -2073,11 +2100,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-        tokenized = re.sub('[.,"\n\t]+', '', caption)
-        tokenized = re.sub('[  ]+', ' ', tokenized)
-        tokenized = map(lambda x: x.lower(), tokenized.split())
-        tokenized = " ".join(tokenized)
-        return tokenized
+        return tokenize_icann(caption)
 
     @staticmethod
     def tokenize_montreal(caption):
@@ -2089,12 +2112,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-        tokenized = re.sub('[.,"\n\t]+', '', caption.strip())
-        tokenized = re.sub('[\']+', " '", tokenized)
-        tokenized = re.sub('[  ]+', ' ', tokenized)
-        tokenized = map(lambda x: x.lower(), tokenized.split())
-        tokenized = " ".join(tokenized)
-        return tokenized
+        return tokenize_montreal(caption)
 
     @staticmethod
     def tokenize_soft(caption, lowercase=True):
@@ -2106,23 +2124,7 @@ class Dataset(object):
         :param lowercase: Whether to lowercase the caption or not
         :return: Tokenized version of caption
         """
-        tokenized = re.sub('[\n\t]+', '', caption.strip())
-        tokenized = re.sub('[\.]+', ' . ', tokenized)
-        tokenized = re.sub('[,]+', ' , ', tokenized)
-        tokenized = re.sub('[!]+', ' ! ', tokenized)
-        tokenized = re.sub('[?]+', ' ? ', tokenized)
-        tokenized = re.sub('[\{]+', ' { ', tokenized)
-        tokenized = re.sub('[\}]+', ' } ', tokenized)
-        tokenized = re.sub('[\(]+', ' ( ', tokenized)
-        tokenized = re.sub('[\)]+', ' ) ', tokenized)
-        tokenized = re.sub('[\[]+', ' [ ', tokenized)
-        tokenized = re.sub('[\]]+', ' ] ', tokenized)
-        tokenized = re.sub('["]+', ' " ', tokenized)
-        tokenized = re.sub('[\']+', " ' ", tokenized)
-        tokenized = re.sub('[  ]+', ' ', tokenized)
-        tokenized = map(lambda x: x.lower(), tokenized.split())
-        tokenized = " ".join(tokenized)
-        return tokenized
+        return tokenize_soft(caption, lowercase=lowercase)
 
     @staticmethod
     def tokenize_none(caption):
@@ -2132,10 +2134,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-        if (type(caption) == type([])):
-                caption = ' '.join(caption)
-        tokenized = re.sub('[\n\t]+', '', caption.strip())
-        return tokenized
+        return tokenize_none(caption)
 
     @staticmethod
     def tokenize_none_char(caption):
@@ -2154,26 +2153,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-
-        def convert_chars(x):
-            if x == ' ':
-                return '<s>'
-            else:
-                return x.encode('utf-8')
-
-        tokenized = re.sub('[\n\t]+', '', caption.strip())
-        tokenized = re.sub('&amp;', ' & ', tokenized)
-        tokenized = re.sub('&#124;', ' | ', tokenized)
-        tokenized = re.sub('&gt;', ' > ', tokenized)
-        tokenized = re.sub('&lt;', ' < ', tokenized)
-        tokenized = re.sub('&apos;', " ' ", tokenized)
-        tokenized = re.sub('&quot;', ' " ', tokenized)
-        tokenized = re.sub('&#91;', ' [ ', tokenized)
-        tokenized = re.sub('&#93;', ' ] ', tokenized)
-        tokenized = re.sub('[ ]+', ' ', tokenized)
-        tokenized = [convert_chars(char) for char in tokenized.decode('utf-8')]
-        tokenized = " ".join(tokenized)
-        return tokenized
+        return tokenize_none_char(caption)
 
     @staticmethod
     def tokenize_CNN_sentence(caption):
@@ -2183,20 +2163,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-        tokenized = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", caption)
-        tokenized = re.sub(r"\'s", " \'s", tokenized)
-        tokenized = re.sub(r"\'ve", " \'ve", tokenized)
-        tokenized = re.sub(r"n\'t", " n\'t", tokenized)
-        tokenized = re.sub(r"\'re", " \'re", tokenized)
-        tokenized = re.sub(r"\'d", " \'d", tokenized)
-        tokenized = re.sub(r"\'ll", " \'ll", tokenized)
-        tokenized = re.sub(r",", " , ", tokenized)
-        tokenized = re.sub(r"!", " ! ", tokenized)
-        tokenized = re.sub(r"\(", " \( ", tokenized)
-        tokenized = re.sub(r"\)", " \) ", tokenized)
-        tokenized = re.sub(r"\?", " \? ", tokenized)
-        tokenized = re.sub(r"\s{2,}", " ", tokenized)
-        return tokenized.strip().lower()
+        return tokenize_CNN_sentence(caption)
 
     @staticmethod
     def tokenize_questions(caption):
@@ -2210,88 +2177,7 @@ class Dataset(object):
         :param caption: String to tokenize
         :return: Tokenized version of caption
         """
-        contractions = {"aint": "ain't", "arent": "aren't", "cant": "can't", "couldve": "could've",
-                        "couldnt": "couldn't",
-                        "couldn'tve": "couldn’t’ve", "couldnt’ve": "couldn’t’ve", "didnt": "didn’t",
-                        "doesnt": "doesn’t",
-                        "dont": "don’t", "hadnt": "hadn’t", "hadnt’ve": "hadn’t’ve", "hadn'tve": "hadn’t’ve",
-                        "hasnt": "hasn’t", "havent": "haven’t", "hed": "he’d", "hed’ve": "he’d’ve", "he’dve": "he’d’ve",
-                        "hes": "he’s", "howd": "how’d", "howll": "how’ll", "hows": "how’s", "Id’ve": "I’d’ve",
-                        "I’dve": "I’d’ve", "Im": "I’m", "Ive": "I’ve", "isnt": "isn’t", "itd": "it’d",
-                        "itd’ve": "it’d’ve",
-                        "it’dve": "it’d’ve", "itll": "it’ll", "let’s": "let’s", "maam": "ma’am", "mightnt": "mightn’t",
-                        "mightnt’ve": "mightn’t’ve", "mightn’tve": "mightn’t’ve", "mightve": "might’ve",
-                        "mustnt": "mustn’t",
-                        "mustve": "must’ve", "neednt": "needn’t", "notve": "not’ve", "oclock": "o’clock",
-                        "oughtnt": "oughtn’t",
-                        "ow’s’at": "’ow’s’at", "’ows’at": "’ow’s’at", "’ow’sat": "’ow’s’at", "shant": "shan’t",
-                        "shed’ve": "she’d’ve", "she’dve": "she’d’ve", "she’s": "she’s", "shouldve": "should’ve",
-                        "shouldnt": "shouldn’t", "shouldnt’ve": "shouldn’t’ve", "shouldn’tve": "shouldn’t’ve",
-                        "somebody’d": "somebodyd", "somebodyd’ve": "somebody’d’ve", "somebody’dve": "somebody’d’ve",
-                        "somebodyll": "somebody’ll", "somebodys": "somebody’s", "someoned": "someone’d",
-                        "someoned’ve": "someone’d’ve", "someone’dve": "someone’d’ve", "someonell": "someone’ll",
-                        "someones": "someone’s", "somethingd": "something’d", "somethingd’ve": "something’d’ve",
-                        "something’dve": "something’d’ve", "somethingll": "something’ll", "thats": "that’s",
-                        "thered": "there’d", "thered’ve": "there’d’ve", "there’dve": "there’d’ve",
-                        "therere": "there’re",
-                        "theres": "there’s", "theyd": "they’d", "theyd’ve": "they’d’ve", "they’dve": "they’d’ve",
-                        "theyll": "they’ll", "theyre": "they’re", "theyve": "they’ve", "twas": "’twas",
-                        "wasnt": "wasn’t",
-                        "wed’ve": "we’d’ve", "we’dve": "we’d’ve", "weve": "we've", "werent": "weren’t",
-                        "whatll": "what’ll",
-                        "whatre": "what’re", "whats": "what’s", "whatve": "what’ve", "whens": "when’s", "whered":
-                            "where’d", "wheres": "where's", "whereve": "where’ve", "whod": "who’d",
-                        "whod’ve": "who’d’ve",
-                        "who’dve": "who’d’ve", "wholl": "who’ll", "whos": "who’s", "whove": "who've", "whyll": "why’ll",
-                        "whyre": "why’re", "whys": "why’s", "wont": "won’t", "wouldve": "would’ve",
-                        "wouldnt": "wouldn’t",
-                        "wouldnt’ve": "wouldn’t’ve", "wouldn’tve": "wouldn’t’ve", "yall": "y’all",
-                        "yall’ll": "y’all’ll",
-                        "y’allll": "y’all’ll", "yall’d’ve": "y’all’d’ve", "y’alld’ve": "y’all’d’ve",
-                        "y’all’dve": "y’all’d’ve",
-                        "youd": "you’d", "youd’ve": "you’d’ve", "you’dve": "you’d’ve", "youll": "you’ll",
-                        "youre": "you’re", "youve": "you’ve"}
-        punct = [';', r"/", '[', ']', '"', '{', '}', '(', ')', '=', '+', '\\',
-                 '_', '-', '>', '<', '@', '`', ',', '?', '!']
-        commaStrip = re.compile("(\d)(\,)(\d)")
-        periodStrip = re.compile("(?!<=\d)(\.)(?!\d)")
-        manualMap = {'none': '0', 'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-                     'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'}
-        articles = ['a', 'an', 'the']
-
-        def processPunctuation(inText):
-            outText = inText
-            for p in punct:
-                if (p + ' ' in inText or ' ' + p in inText) or (re.search(commaStrip, inText) is not None):
-                    outText = outText.replace(p, '')
-                else:
-                    outText = outText.replace(p, ' ')
-            outText = periodStrip.sub("", outText, re.UNICODE)
-            return outText
-
-        def processDigitArticle(inText):
-            outText = []
-            tempText = inText.lower().split()
-            for word in tempText:
-                word = manualMap.setdefault(word, word)
-                if word not in articles:
-                    outText.append(word)
-                else:
-                    pass
-            for wordId, word in enumerate(outText):
-                if word in contractions:
-                    outText[wordId] = contractions[word]
-            outText = ' '.join(outText)
-            return outText
-
-        resAns = caption.lower()
-        resAns = resAns.replace('\n', ' ')
-        resAns = resAns.replace('\t', ' ')
-        resAns = resAns.strip()
-        resAns = processPunctuation(resAns.decode("utf-8").encode("utf-8"))
-        resAns = processDigitArticle(resAns)
-
-        return resAns
+        return tokenize_questions(caption)
 
     def tokenize_bpe(self, caption):
         """
@@ -2314,9 +2200,7 @@ class Dataset(object):
         :param caption: String to de-tokenize.
         :return: Same caption.
         """
-        if type(caption) == str:
-            caption = caption.decode('utf-8')
-        return caption
+        return detokenize_none(caption)
 
     @staticmethod
     def detokenize_bpe(caption, separator=u'@@'):
@@ -2326,11 +2210,7 @@ class Dataset(object):
         :param separator: BPE separator.
         :return: Detokenized version of caption.
         """
-        if type(caption) == str:
-            caption = caption.decode('utf-8')
-        bpe_detokenization = re.compile(u'(' + separator + u' )|(' + separator + u' ?$)')
-        detokenized = bpe_detokenization.sub(u'', caption).strip()
-        return detokenized
+        return detokenize_bpe(caption, separator=separator)
 
     @staticmethod
     def detokenize_none_char(caption):
@@ -2349,24 +2229,56 @@ class Dataset(object):
         :param caption: String to de-tokenize.
             :return: Detokenized version of caption.
         """
+        return detokenize_none_char(caption)
 
-        def deconvert_chars(x):
-            if x == '<s>':
-                return ' '
-            else:
-                return x.encode('utf-8')
+    def tokenize_moses(self, caption, language='en', lowercase=False, aggressive_dash_splits=False, return_str=True, escape=False):
+        """
+        Applies the Moses tokenization. Relying on NLTK implementation of the Moses tokenizer.
 
-        detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
-        detokenized = re.sub(' \| ', ' &#124; ', detokenized)
-        detokenized = re.sub(' > ', ' &gt; ', detokenized)
-        detokenized = re.sub(' < ', ' &lt; ', detokenized)
-        detokenized = re.sub("' ", ' &apos; ', detokenized)
-        detokenized = re.sub('" ', ' &quot; ', detokenized)
-        detokenized = re.sub('\[ ', ' &#91; ', detokenized)
-        detokenized = re.sub('\] ', ' &#93; ', detokenized)
-        detokenized = re.sub(' ', '', detokenized)
-        detokenized = re.sub('<s>', ' ', detokenized)
-        return detokenized
+        :param caption: Sentence to tokenize
+        :param language: Language (will build the tokenizer for this language)
+        :param lowercase: Whether to lowercase or not the sentence
+        :param agressive_dash_splits: Option to trigger dash split rules .
+        :param return_str: Return string or list
+        :param escape: Escape HTML special chars
+        :return:
+        """
+        # Compatibility with old Datasets instances:
+        if not hasattr(self, 'moses_tokenizer_built'):
+            self.moses_tokenizer_built = False
+        if not self.moses_tokenizer_built:
+            self.build_moses_tokenizer(language=language)
+        if type(caption) == str:
+            caption = caption.decode('utf-8')
+        tokenized = re.sub(u'[\n\t]+', u'', caption)
+        if lowercase:
+            tokenized = tokenized.lower()
+        return self.moses_tokenizer.tokenize(tokenized, agressive_dash_splits=aggressive_dash_splits,
+                                             return_str=return_str, escape=escape)
+
+    def detokenize_moses(self, caption, language='en', lowercase=False, return_str=True, unescape=True):
+        """
+        Applies the Moses detokenization. Relying on NLTK implementation of the Moses tokenizer.
+
+        :param caption: Sentence to tokenize
+        :param language: Language (will build the tokenizer for this language)
+        :param lowercase: Whether to lowercase or not the sentence
+        :param agressive_dash_splits: Option to trigger dash split rules .
+        :param return_str: Return string or list
+        :param escape: Escape HTML special chars
+        :return:
+        """
+        # Compatibility with old Datasets instances:
+        if not hasattr(self, 'moses_detokenizer_built'):
+            self.moses_detokenizer_built = False
+        if not self.moses_detokenizer_built:
+            self.build_moses_detokenizer(language=language)
+        if type(caption) == str:
+            caption = caption.decode('utf-8')
+        tokenized = re.sub(u'[\n\t]+', u'', caption)
+        if lowercase:
+            tokenized = tokenized.lower()
+        return self.moses_detokenizer.detokenize(tokenized.split(), return_str=return_str, unescape=unescape)
 
     # ------------------------------------------------------- #
     #       TYPE 'video' and 'video-features' SPECIFIC FUNCTIONS
@@ -2658,9 +2570,10 @@ class Dataset(object):
         h_crop, w_crop, d_crop = self.img_size_crop[self.id_in_3DLabel[self.ids_outputs[0]]]
         output_id = ''.join(self.ids_outputs)
 
-        #prepare the segmented image
+        # prepare the segmented image
         pred_labels = np.reshape(img, (h_crop, w_crop, n_classes))
-        out_img = np.zeros((h_crop, w_crop, d_crop))
+        # out_img = np.zeros((h_crop, w_crop, d_crop))
+        out_img = np.zeros((h_crop, w_crop, 3))  # predictions saved as RGB images (3 channels)
 
         for ih in range(h_crop):
             for iw in range(w_crop):
@@ -2668,7 +2581,6 @@ class Dataset(object):
                 out_img[ih, iw, :] = self.semantic_classes[output_id][lab]
 
         return out_img
-
 
     def preprocess3DSemanticLabel(self, path_list, id, associated_id_in, num_poolings):
         return self.preprocess3DLabel(path_list, id, associated_id_in, num_poolings)
@@ -2715,6 +2627,9 @@ class Dataset(object):
         :param id: id of the input/output we are processing
         :return: out_list: containing a list of label images reshaped as an Nx1 array
         """
+        from PIL import Image as pilimage
+        from scipy import misc
+
         out_list = []
 
         assoc_id_in = self.id_in_3DLabel[id]
@@ -2791,6 +2706,8 @@ class Dataset(object):
         return out_list
 
     def resize_semantic_output(self, predictions, ids_out):
+        from scipy import misc
+
         out_pred = []
 
         for pred, id_out in zip(predictions, ids_out):
@@ -2847,6 +2764,7 @@ class Dataset(object):
         :param threshold: minimum overlapping threshold for considering a prediction valid
         :return: predicted_bboxes, predicted_Y, predicted_scores for each image
         """
+        from scipy import ndimage
         out_list = []
 
         # if type is list it will be assumed that position 0 corresponds to 3DLabels
@@ -2988,7 +2906,7 @@ class Dataset(object):
 
         return data
 
-    def setTrainMean(self, mean_image, id, normalization=False):
+    def setTrainMean(self, mean_image, id, use_RGB=True, normalization=False):
         """
             Loads a pre-calculated training mean image, 'mean_image' can either be:
             
@@ -2997,9 +2915,12 @@ class Dataset(object):
             - string with the path to the stored image.
             
         :param mean_image:
+        :param user_RGB: set to False for grayscale images
         :param normalization:
         :param id: identifier of the type of input whose train mean is being introduced.
         """
+        from scipy import misc
+
         if isinstance(mean_image, str):
             if not self.silence:
                 logging.info("Loading train mean image from file.")
@@ -3012,6 +2933,16 @@ class Dataset(object):
             self.train_mean[id] /= 255.0
 
         if self.train_mean[id].shape != tuple(self.img_size_crop[id]):
+            """
+            if not use_RGB:
+                if len(self.train_mean[id].shape) == 1:
+                    if not self.silence:
+                        logging.info("Converting input train mean pixels into mean image.")
+                    mean_image = np.zeros(tuple(self.img_size_crop[id]), np.float64)
+                    mean_image[:, :] = self.train_mean[id]
+                    self.train_mean[id] = mean_image
+            else:
+            """
             if len(self.train_mean[id].shape) == 1 and self.train_mean[id].shape[0] == self.img_size_crop[id][2]:
                 if not self.silence:
                     logging.info("Converting input train mean pixels into mean image.")
@@ -3029,6 +2960,8 @@ class Dataset(object):
         """
             Calculates the mean of the data belonging to the training set split in each channel.
         """
+        from scipy import misc
+
         calculate = False
         if id not in self.train_mean or not isinstance(self.train_mean[id], np.ndarray):
             calculate = True
@@ -3103,6 +3036,10 @@ class Dataset(object):
         :param loaded : set this option to True if images is a list of matricies instead of a list of strings
         """
         # Check if the chosen normalization type exists
+        from PIL import Image as pilimage
+        from scipy import misc
+        import keras
+
         if normalization_type is None:
             normalization_type = '(-1)-1'
         if normalization and normalization_type not in self.__available_norm_im_vid:
@@ -3123,7 +3060,8 @@ class Dataset(object):
                 # Convert RGB to BGR
                 if self.img_size[id][2] == 3:  # if has 3 channels
                     train_mean = train_mean[:, :, ::-1]
-                train_mean = train_mean.transpose(2, 0, 1)
+                if keras.backend.image_data_format() == 'channels_first':
+                    train_mean = train_mean.transpose(2, 0, 1)
 
             # Also normalize training mean image if we are applying normalization to images
             if normalization:
@@ -3137,7 +3075,10 @@ class Dataset(object):
 
         type_imgs = np.float64
         if len(self.img_size[id]) == 3:
-            I = np.zeros([nImages] + [self.img_size_crop[id][2]] + self.img_size_crop[id][0:2], dtype=type_imgs)
+            if keras.backend.image_data_format() == 'channels_first':
+                I = np.zeros([nImages] + [self.img_size_crop[id][2]] + self.img_size_crop[id][0:2], dtype=type_imgs)
+            else:
+                I = np.zeros([nImages] + self.img_size_crop[id][0:2] + [self.img_size_crop[id][2]], dtype=type_imgs)
         else:
             I = np.zeros([nImages] + self.img_size_crop[id], dtype=type_imgs)
 
@@ -3179,35 +3120,41 @@ class Dataset(object):
                     im = im.convert('RGB')
                 else:
                     im = im.convert('L')
+                im = np.asarray(im, dtype=type_imgs)
 
             # Data augmentation
             if not dataAugmentation:
                 # Use whole image
-                im = np.asarray(im, dtype=type_imgs)
+
                 im = misc.imresize(im, (self.img_size_crop[id][0], self.img_size_crop[id][1]))
                 im = np.asarray(im, dtype=type_imgs)
+
+                if not self.use_RGB[id]:
+                    im = np.expand_dims(im, 2)
+
             else:
                 randomParams = daRandomParams[images[i]]
                 # Resize
-                im = np.asarray(im, dtype=type_imgs)
+
                 im = misc.imresize(im, (self.img_size[id][0], self.img_size[id][1]))
                 im = np.asarray(im, dtype=type_imgs)
+
+                if not self.use_RGB[id]:
+                    im = np.expand_dims(im, 2)
 
                 # Take random crop
                 left = randomParams["left"]
                 right = np.add(left, self.img_size_crop[id][0:2])
-                if self.use_RGB[id]:
-                    try:
-                        im = im[left[0]:right[0], left[1]:right[1], :]
-                    except:
-                        print '------- ERROR -------'
-                        print left
-                        print right
-                        print im.shape
-                        print imname
-                        raise Exception('Error with image ' + imname)
-                else:
-                    im = im[left[0]:right[0], left[1]:right[1]]
+
+                try:
+                    im = im[left[0]:right[0], left[1]:right[1], :]
+                except:
+                    print '------- ERROR -------'
+                    print left
+                    print right
+                    print im.shape
+                    print imname
+                    raise Exception('Error with image ' + imname)
 
                 # Randomly flip (with a certain probability)
                 flip = randomParams["hflip"]
@@ -3232,7 +3179,8 @@ class Dataset(object):
                 # Convert RGB to BGR
                 if self.img_size[id][2] == 3:  # if has 3 channels
                     im = im[:, :, ::-1]
-                im = im.transpose(2, 0, 1)
+                if keras.backend.image_data_format() == 'channels_first':
+                    im = im.transpose(2, 0, 1)
             else:
                 pass
 
@@ -3312,7 +3260,6 @@ class Dataset(object):
                                 (random flip and cropping)
         :return: X, list of input data variables from sample 'init' to 'final' belonging to the chosen 'set_name'
         """
-
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
 
@@ -3335,6 +3282,7 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = eval('self.X_' + set_name + '[id_in][init:final]')
+            #print("get_X: ",id_in, x)
             if not debug and not ghost_x:
                 if type_in == 'raw-image':
                     daRandomParams = None
@@ -3345,7 +3293,7 @@ class Dataset(object):
                 elif type_in == 'video':
                     x = self.loadVideos(x, id_in, final, set_name, self.max_video_len[id_in],
                                         normalization_type, normalization, meanSubstraction, dataAugmentation)
-                elif type_in == 'text':
+                elif type_in == 'text' or type_in == 'dense_text':
                     # If we are using Character-Based MT (Convolutional character embedding)
                     if self.max_word_len[id_in][set_name] > 0 and 'source_text' == id_in:
                         if self.char_bpe:
@@ -3432,6 +3380,7 @@ class Dataset(object):
                         'self.X_' + set_name + '[id_in][0:new_last]')
                 else:
                     x = eval('self.X_' + set_name + '[id_in][last:new_last]')
+            #print("get_XY_X: ", id_in, x)
             # Pre-process inputs
             if not debug:
                 if type_in == 'raw-image':
@@ -3443,7 +3392,7 @@ class Dataset(object):
                 elif type_in == 'video':
                     x = self.loadVideos(x, id_in, last, set_name, self.max_video_len[id_in],
                                         normalization_type, normalization, meanSubstraction, dataAugmentation)
-                elif type_in == 'text':
+                elif type_in == 'text' or type_in == 'dense_text':
                     # If we are using Character-Based MT (Convolutional character embedding)
                     if self.max_word_len[id_in][set_name] > 0 and id_in == 'source_text':
                         if self.char_bpe:
@@ -3489,6 +3438,7 @@ class Dataset(object):
                 y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
             else:
                 y = eval('self.Y_' + set_name + '[id_out][last:new_last]')
+            #print("get_XY_Y: ", id_in, y)
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':
@@ -3524,36 +3474,25 @@ class Dataset(object):
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, daRandomParams,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
-                elif type_out == 'text':
-
+                elif type_out == 'text' or type_out == 'dense_text':
                     y = self.loadText(y, self.vocabulary[id_out], self.max_text_len[id_out][set_name], #0 maxwordlen?
                                       self.text_offset[id_out], fill=self.fill_text[id_out],
                                       pad_on_batch=self.pad_on_batch[id_out], words_so_far=self.words_so_far[id_out], loading_X=False)
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
-                        y_aux = np_utils.to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
+                        y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
-                    else:
+                    elif type_out == 'text':
                         y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
-                                np.uint8)
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(np.uint8)
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
-                    y = y_aux
-            '''
-            print('########')
-            if id_in == 'link_index':            
-                y_deco = one_hot_2_indices(y[0])
-                #print("Y_DECOD= ", y_deco)
-                print(map(lambda j: ' '.join(
-                    map(self.vocabulary['description']['idx2words'].get, j)), y_deco)) # filter(lambda z: z!=0, j)
-            elif id_in == 'state_below' or id_in=='prev_sentence':
-                print(map(lambda j: ' '.join(map(self.vocabulary['description']['idx2words'].get, filter(lambda z:z!=0, j))), y))
-            else:
-                print(map(lambda j: ' '.join(
-                    map(self.vocabulary['source_text']['idx2words'].get, filter(lambda z: z != 0, j))), y)) 
-            '''
+                        y = y_aux
+
+                if type_out == 'dense_text':
+                    y = (y[0][:, :, None], y[1])
+
             Y.append(y)
 
         if debug:
@@ -3587,6 +3526,7 @@ class Dataset(object):
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
         self.__isLoaded(set_name, 1)
+
         # Recover input samples
         X = []
         for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
@@ -3599,6 +3539,7 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+
             # if(set_name=='val'):
             #    logging.info(x)
 
@@ -3676,23 +3617,27 @@ class Dataset(object):
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, daRandomParams,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
-                elif type_out == 'text':
+                elif type_out == 'text' or type_out == 'dense_text':
                     y = self.loadText(y, self.vocabulary[id_out],
                                       self.max_text_len[id_out][set_name], self.text_offset[id_out], # self.max_word_len[id_out][set_name],
                                       fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
                                       words_so_far=self.words_so_far[id_out], loading_X=False)
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
-                        y_aux = np_utils.to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
+                        y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
-                    else:
+                    elif type_out == 'text':
                         y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
                                 np.uint8)
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
-                    y = y_aux
+                        y = y_aux
+
+                if type_out == 'dense_text':
+                    y = (y[0][:, :, None], y[1])
+
             Y.append(y)
 
         return [X, Y]
@@ -3719,6 +3664,7 @@ class Dataset(object):
         :return: [X,Y], list of input and output data variables of the samples identified by the indices in 'k'
                  samples belonging to the chosen 'set_name'
         """
+
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
 
@@ -3734,6 +3680,7 @@ class Dataset(object):
                     ghost_x = True
             else:
                 x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+
             # if(set_name=='val'):
             #    logging.info(x)
 
@@ -3808,6 +3755,7 @@ class Dataset(object):
         """
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 1)
+
         if final > eval('self.len_' + set_name):
             raise Exception('"final" index must be smaller than the number of samples in the set.')
         if init < 0:
@@ -3819,6 +3767,7 @@ class Dataset(object):
         Y = []
         for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
             y = eval('self.Y_' + set_name + '[id_out][init:final]')
+
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':
@@ -3843,7 +3792,7 @@ class Dataset(object):
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, None,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
-                elif type_out == 'text':
+                elif type_out == 'text' or type_out == 'dense_text':
                     y = self.loadText(y, self.vocabulary[id_out],
                                       self.max_text_len[id_out][set_name], self.text_offset[id_out],
                                       fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
@@ -3851,17 +3800,21 @@ class Dataset(object):
 
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
-                        y_aux = np_utils.to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
+                        y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
-                    else:
+                    elif type_out == 'text':
                         y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = np_utils.to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
                                 np.uint8)
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
 
-                    y = y_aux
+                        y = y_aux
+
+                if type_out == 'dense_text':
+                    y = (y[0][:, :, None], y[1])
+
             Y.append(y)
 
         return Y
@@ -3946,7 +3899,7 @@ class Dataset(object):
                 raise Exception('Inputs and outputs size '
                                 '(' + str(lengths) + ') for "' + set_name + '" set do not match.\n'
                                                                             '\t Inputs:' + str(plot_ids_in) + ''
-                                                                            '\t Outputs:' + str(self.ids_outputs))
+                                                                                                              '\t Outputs:' + str(self.ids_outputs))
 
     def __getNextSamples(self, k, set_name):
         """

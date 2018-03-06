@@ -425,7 +425,6 @@ class BeamSearchEnsemble:
                                     link = -1
                                 prev_x = [ds.vocabulary[input_id]['idx2words'][w] for w in
                                           previous_outputs[input_id][link]]
-
                                 x[input_id] = ds.loadText([' '.join(prev_x)],
                                                           ds.vocabulary[input_id],
                                                           ds.max_text_len[input_id][s],
@@ -436,6 +435,7 @@ class BeamSearchEnsemble:
                                                           loading_X=True)[0]
                             else:
                                 x[input_id] = np.asarray([X[input_id][i]])
+
                         samples, scores, alphas = self.beam_search(x,
                                                                    params,
                                                                    eos_sym=ds.extra_words['<pad>'],

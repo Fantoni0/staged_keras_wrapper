@@ -129,7 +129,7 @@ def tokenize_none(caption):
     :param caption: String to tokenize
     :return: Tokenized version of caption
     """
-    tokenized = re.sub('[\n\t]+', '', caption.strip())
+    tokenized = re.sub('[\n\t]+', '', str(caption).strip())
     return tokenized
 
 
