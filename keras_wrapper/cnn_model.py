@@ -500,7 +500,7 @@ class Model_Wrapper(object):
         self.outputsMapping = outputsMapping
         self.acc_output = acc_output
 
-    def setOptimizer(self, lr=None, momentum=None, loss=None, loss_weights=None, metrics=None, epsilon=1e-8,
+    def setOptimizer(self, lr=None, momentum=None, loss='categorical_crossentropy', loss_weights=None, metrics=None, epsilon=1e-8,
                      nesterov=True, decay=0.0, clipnorm=10., clipvalue=0., optimizer=None, sample_weight_mode=None,
                      tf_optimizer=True):
         """
@@ -529,10 +529,7 @@ class Model_Wrapper(object):
             momentum = self.momentum
         else:
             self.momentum = momentum
-        if loss is None:
-            loss = self.loss
-        else:
-            self.loss = loss
+        self.loss = loss
         if metrics is None:
             metrics = []
         if tf_optimizer and K.backend() == 'tensorflow':
@@ -660,8 +657,9 @@ class Model_Wrapper(object):
             if key not in params:
                 params[key] = default_val
 
-        #if 'n_parallel_loaders' in params and params['n_parallel_loaders'] > 1:
-        #    logging.info('WARNING: parallel loaders are not implemented')
+        if 'n_parallel_loaders' in params and params['n_parallel_loaders'] > 1:
+            logging.info('WARNING: parallel loaders are not implemented')
+            params['n_parallel_loaders'] = 1
 
         return params
 
@@ -1026,6 +1024,7 @@ class Model_Wrapper(object):
         class_weight = {}
         if params['class_weights'] is not None:
             class_weight = ds.extra_variables['class_weights_' + params['class_weights']]
+
         # Train model
         if int(keras.__version__.split('.')[0]) == 1:
             # Keras 1.x version
@@ -1270,10 +1269,10 @@ class Model_Wrapper(object):
             all_data = {}
             for output_id in range(len(output_ids_list)):
                 all_data[output_ids_list[output_id]] = out_data[output_id]
-            all_data[output_ids_list[0]] = np.array(all_data[output_ids_list[0]])[:, pick_idx, :]
+            all_data[output_ids_list[params['feedback_decoder']]] = np.array(all_data[output_ids_list[params['feedback_decoder']]])[:, pick_idx, :]
         else:
-            all_data = {output_ids_list[0]: np.array(out_data)[:, pick_idx, :]}
-        probs = all_data[output_ids_list[0]]
+            all_data = {output_ids_list[params['feedback_decoder']]: np.array(out_data)[:, pick_idx, :]}
+        probs = all_data[output_ids_list[params['feedback_decoder']]]
 
         ##########################################
         # Define returned data
@@ -1388,16 +1387,14 @@ class Model_Wrapper(object):
         ##########################################
         # Get outputs
         ##########################################
-
         if len(output_ids_list) > 1:
             all_data = {}
             for output_id in range(len(output_ids_list)):
                 all_data[output_ids_list[output_id]] = out_data[output_id]
-            all_data[output_ids_list[0]] = np.array(all_data[output_ids_list[0]])[:, pick_idx, :]
+            all_data[output_ids_list[params['feedback_decoder']]] = np.array(all_data[output_ids_list[params['feedback_decoder']]])[:, pick_idx, :]
         else:
-            all_data = {output_ids_list[0]: np.array(out_data)[:, pick_idx, :]}
-        probs = all_data[output_ids_list[0]]
-
+            all_data = {output_ids_list[params['feedback_decoder']]: np.array(out_data)[:, pick_idx, :]}
+        probs = all_data[output_ids_list[params['feedback_decoder']]]
         ##########################################
         # Define returned data
         ##########################################
@@ -1871,6 +1868,7 @@ class Model_Wrapper(object):
                           'temporally_linked': False,
                           'link_index_id': 'link_index',
                           'state_below_index': -1,
+                          'feedback_decoder': 0,
                           'max_eval_samples': None,
                           }
         params = self.checkParameters(parameters, default_params)
@@ -2137,6 +2135,7 @@ class Model_Wrapper(object):
                           'temporally_linked': False,
                           'link_index_id': 'link_index',
                           'state_below_index': -1,
+                          'feedback_decoder': 0,
                           'state_below_maxlen': -1,
                           'max_eval_samples': None,
                           'normalize_probs': False,
@@ -2301,12 +2300,6 @@ class Model_Wrapper(object):
                                                           loading_X=True)[0]
                             else:
                                 x[input_id] = np.asarray([X[input_id][i]])
-<<<<<<< HEAD
-
-                            #print(""+input_id+" :", " ".join([ds.vocabulary[input_id]['idx2words'][w] for w in X[input_id][i]]))
-                        #print('--------------------------')
-=======
->>>>>>> 59b565c4a1f3fafbd6991dfea4027e63cc110542
                         samples, scores, alphas = self.beam_search(x,
                                                                    params,
                                                                    eos_sym=ds.extra_words['<pad>'],

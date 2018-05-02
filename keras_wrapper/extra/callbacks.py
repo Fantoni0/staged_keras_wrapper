@@ -173,7 +173,6 @@ class EvalPerformance(KerasCallback):
 
         self.gt_id = gt_id
         self.gt_pos = gt_pos
-
         self.input_text_id = input_text_id
         self.input_id = input_id
         self.index2word_x = index2word_x
@@ -217,6 +216,7 @@ class EvalPerformance(KerasCallback):
         self.save_each_evaluation = save_each_evaluation
         self.written_header = False
         self.do_plot = do_plot
+
         create_dir_if_not_exists(self.save_path)
 
         # Single-output model
@@ -441,7 +441,7 @@ class EvalPerformance(KerasCallback):
                 if self.write_samples:
                     # Store result
                     filepath = self.save_path + '/' + s + '_' + counter_name + '_' + str(epoch) + '_output_' + str(
-                        gt_pos) + '.pred'  # results file
+                        gt_pos) +'.pred'  # results file
                     if write_type == 'list':
                         list2file(filepath, predictions)
                     elif write_type == 'vqa':
@@ -738,14 +738,14 @@ class Sample(KerasCallback):
                 if self.print_sources:
                     # Write samples
                     for i, (source, sample, truth) in enumerate(zip(sources, predictions, truths)):
-                        print("Source     (%d): %s" % (i, str(source.encode('utf-8'))))
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                        print("Source     (%d): %s" % (i, source.encode('utf-8')))
+                        print("Hypothesis (%d): %s" % (i, sample.encode('utf-8')))
+                        print("Reference  (%d): %s" % (i, truth.encode('utf-8')))
                         print("")
                 else:
                     for i, (sample, truth) in enumerate(zip(predictions, truths)):
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                        print("Hypothesis (%d): %s" % (i, sample.encode('utf-8')))
+                        print("Reference  (%d): %s" % (i, truth.encode('utf-8')))
                         print("")
 
 
@@ -927,9 +927,9 @@ class LearningRateReducer(KerasCallback):
         new_rate = self.reduce_rate if self.reduction_function == 'linear' else \
             np.power(self.exp_base, current_nb / self.half_life) * self.reduce_rate
         if K.backend() == 'tensorflow':
-            lr = K.get_value(self.model.optimizer.lr)
+            lr = self.model.optimizer.get_lr()
             self.new_lr = np.float32(lr * new_rate)
-            K.set_value(self.model.optimizer.lr, self.new_lr)
+            self.model.optimizer.set_lr(self.new_lr)
         else:
             lr = self.model.optimizer.lr.get_value()
             self.new_lr = np.float32(lr * new_rate)

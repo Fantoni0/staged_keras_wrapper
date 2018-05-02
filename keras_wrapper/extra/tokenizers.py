@@ -129,13 +129,13 @@ def tokenize_none(caption):
     :param caption: String to tokenize
     :return: Tokenized version of caption
     """
-    tokenized = re.sub('[\n\t]+', '', str(caption).strip())
+    tokenized = re.sub('[\n\t]+', '', caption.strip())
     return tokenized
 
 
 def tokenize_none_char(caption):
     """
-    Character-level tokenization. Respects all symbols. Separates chars. Inserts <space> sybmol for spaces.
+    Character-level tokenization. Respects all symbols. Separates chars. Inserts <s> sybmol for spaces.
     If found an escaped char, "&apos;" symbol, it is converted to the original one
     # List of escaped chars (by moses tokenizer)
     & ->  &amp;
@@ -152,7 +152,7 @@ def tokenize_none_char(caption):
 
     def convert_chars(x):
         if x == ' ':
-            return '<space>'
+            return '<s>'
         else:
             return x.encode('utf-8')
 
@@ -166,7 +166,7 @@ def tokenize_none_char(caption):
     tokenized = re.sub('&#91;', ' [ ', tokenized)
     tokenized = re.sub('&#93;', ' ] ', tokenized)
     tokenized = re.sub('[  ]+', ' ', tokenized)
-    tokenized = [convert_chars(char) for char in tokenized.decode('utf-8')]
+    tokenized = [convert_chars(char) for char in tokenized.decode('utf-8')] #
     tokenized = " ".join(tokenized)
     return tokenized
 
@@ -273,7 +273,7 @@ def tokenize_questions(caption):
                 outText.append(word)
             else:
                 pass
-        for wordId, word in enumerate(outText):
+        for wordId, word in list(enumerate(outText)):
             if word in contractions:
                 outText[wordId] = contractions[word]
         outText = ' '.join(outText)
@@ -332,7 +332,7 @@ def detokenize_bpe(caption, separator=u'@@'):
 def detokenize_none_char(caption):
     """
     Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by
-    the <space> token. If found an special character is converted to the escaped char.
+    the <s> token. If found an special character is converted to the escaped char.
     # List of escaped chars (by moses tokenizer)
         & ->  &amp;
         | ->  &#124;
@@ -346,11 +346,11 @@ def detokenize_none_char(caption):
         :return: Detokenized version of caption.
     """
 
-    def deconvert_chars(x):
-        if x == '<space>':
-            return ' '
-        else:
-            return x.encode('utf-8')
+    # def deconvert_chars(x):
+    #     if x == '<s>':
+    #         return ' '
+    #     else:
+    #         return x.encode('utf-8')
 
     detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
     detokenized = re.sub(' \| ', ' &#124; ', detokenized)
@@ -361,5 +361,5 @@ def detokenize_none_char(caption):
     detokenized = re.sub('\[ ', ' &#91; ', detokenized)
     detokenized = re.sub('\] ', ' &#93; ', detokenized)
     detokenized = re.sub(' ', '', detokenized)
-    detokenized = re.sub('<space>', ' ', detokenized)
+    detokenized = re.sub('<s>', ' ', detokenized)
     return detokenized
