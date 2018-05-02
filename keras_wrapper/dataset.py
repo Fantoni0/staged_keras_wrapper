@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-import cPickle as pk
+from __future__ import print_function
+from six import iteritems
+from functools import reduce
+
 import copy
 import fnmatch
 import logging
@@ -8,16 +11,24 @@ import os
 import random
 import re
 import sys
-#import threading
+
+if sys.version_info.major == 3:
+    import _pickle  as pk
+else:
+    import cPickle as pk
+    from itertools import imap as map
+    from itertools import izip as zip
+    from itertools import ifilter as filter
+
 from collections import Counter
 from operator import add
 import numpy as np
-from extra.read_write import create_dir_if_not_exists
-from extra.tokenizers import *
+from keras_wrapper.extra.read_write import create_dir_if_not_exists
+from keras_wrapper.extra.tokenizers import *
 from .utils import bbox, to_categorical
 
-#from .utils import MultiprocessQueue
-#import multiprocessing
+from .utils import MultiprocessQueue
+import multiprocessing
 
 
 # ------------------------------------------------------- #
@@ -38,7 +49,7 @@ def saveDataset(dataset, store_path):
     if not dataset.silence:
         logging.info("<<< Saving Dataset instance to " + store_path + " ... >>>")
 
-    pk.dump(dataset, open(store_path, 'wb'), protocol=pk.HIGHEST_PROTOCOL)
+    pk.dump(dataset, open(store_path, 'wb'), protocol=-1)
 
     if not dataset.silence:
         logging.info("<<< Dataset instance saved >>>")
@@ -53,8 +64,10 @@ def loadDataset(dataset_path):
     """
 
     logging.info("<<< Loading Dataset instance from " + dataset_path + " ... >>>")
-
-    dataset = pk.load(open(dataset_path, 'rb'))
+    if sys.version_info.major == 3:
+        dataset = pk.load(open(dataset_path, 'rb'), encoding='latin1')
+    else:
+        dataset = pk.load(open(dataset_path, 'rb'))
 
     logging.info("<<< Dataset instance loaded >>>")
     return dataset
@@ -64,9 +77,8 @@ def loadDataset(dataset_path):
 #       DATA BATCH GENERATOR CLASS
 # ------------------------------------------------------- #
 
-"""
 def dataLoad(process_name, net, dataset, max_queue_len, queues):
-    print "Starting "+process_name+"..."
+    logging.info("Starting " + process_name + "...")
     in_queue, out_queue = queues
 
     while True:
@@ -75,39 +87,201 @@ def dataLoad(process_name, net, dataset, max_queue_len, queues):
 
         # available modes are 'indices' and 'consecutive'
         data_queue = in_queue.get()
-        ##print data_queue
+
         [mode, predict, set_split, ind, normalization, normalization_type, mean_substraction, data_augmentation] = data_queue
 
         # Recovers a batch of data
         if predict:
             if mode == 'indices':
                 X_batch = dataset.getX_FromIndices(set_split,
-                                                    ind[0],
-                                                    normalization=normalization,
-                                                    normalization_type=normalization_type,
-                                                    meanSubstraction=mean_substraction,
-                                                    dataAugmentation=data_augmentation)
+                                                   ind[0],
+                                                   normalization=normalization,
+                                                   normalization_type=normalization_type,
+                                                   meanSubstraction=mean_substraction,
+                                                   dataAugmentation=data_augmentation)
             elif mode == 'consecutive':
                 X_batch = dataset.getX(set_split,
-                                                    ind[0], ind[1],
-                                                    normalization=normalization,
-                                                    normalization_type=normalization_type,
-                                                    meanSubstraction=mean_substraction,
-                                                    dataAugmentation=data_augmentation)
+                                       ind[0], ind[1],
+                                       normalization=normalization,
+                                       normalization_type=normalization_type,
+                                       meanSubstraction=mean_substraction,
+                                       dataAugmentation=data_augmentation)
             else:
-                raise NotImplementedError("Data retrieval mode '"+mode+"' is not implemented.")
+                raise NotImplementedError("Data retrieval mode '" + mode + "' is not implemented.")
             data = net.prepareData(X_batch, None)[0]
         else:
-            X_batch, Y_batch = dataset.getXY(set_split,
-                                                        ind[0],
-                                                        normalization=normalization,
-                                                        normalization_type=normalization_type,
-                                                        meanSubstraction=mean_substraction,
-                                                        dataAugmentation=data_augmentation)
+            X_batch, Y_batch = dataset.getXY_FromIndices(set_split,
+                                                         ind[0],
+                                                         normalization=normalization,
+                                                         normalization_type=normalization_type,
+                                                         meanSubstraction=mean_substraction,
+                                                         dataAugmentation=data_augmentation)
             data = net.prepareData(X_batch, Y_batch)
 
         out_queue.put(data)
-"""
+
+
+class Parallel_Data_Batch_Generator(object):
+    """
+    Batch generator class. Retrieves batches of data.
+    """
+
+    def __init__(self,
+                 set_split,
+                 net,
+                 dataset,
+                 num_iterations,
+                 batch_size=50,
+                 normalization=True,
+                 normalization_type=None,
+                 data_augmentation=True,
+                 mean_substraction=False,
+                 predict=False,
+                 random_samples=-1,
+                 shuffle=True,
+                 temporally_linked=False,
+                 init_sample=-1,
+                 final_sample=-1,
+                 n_parallel_loaders=1):
+        """
+        Initializes the Data_Batch_Generator
+        :param set_split: Split (train, val, test) to retrieve data
+        :param net: Net which use the data
+        :param dataset: Dataset instance
+        :param num_iterations: Maximum number of iterations
+        :param batch_size: Size of the minibatch
+        :param normalization: Switches on/off the normalization of images
+        :param data_augmentation: Switches on/off the data augmentation of the input
+        :param mean_substraction: Switches on/off the mean substraction for images
+        :param predict: Whether we are predicting or training
+        :param random_samples: Retrieves this number of training samples
+        :param shuffle: Shuffle the training dataset
+        :param temporally_linked: Indicates if we are using a temporally-linked model
+        :param n_parallel_loaders: Number of parallel loaders that will be used.
+        """
+        self.set_split = set_split
+        self.dataset = dataset
+        self.net = net
+        self.predict = predict
+        self.temporally_linked = temporally_linked
+        self.first_idx = -1
+        self.init_sample = init_sample
+        self.final_sample = final_sample
+        self.next_idx = None
+        self.thread_list = []
+
+        # Several parameters
+        self.params = {'batch_size': batch_size,
+                       'data_augmentation': data_augmentation,
+                       'mean_substraction': mean_substraction,
+                       'normalization': normalization,
+                       'normalization_type': normalization_type,
+                       'num_iterations': num_iterations,
+                       'random_samples': random_samples,
+                       'shuffle': shuffle,
+                       'n_parallel_loaders': n_parallel_loaders}
+
+    def __del__(self):
+        self.terminateThreads()
+
+    def terminateThreads(self):
+        for t in self.thread_list:
+            t.terminate()
+
+    def generator(self):
+        """
+        Gets and processes the data
+        :return: generator with the data
+        """
+
+        if self.set_split == 'train' and not self.predict:
+            data_augmentation = self.params['data_augmentation']
+        else:
+            data_augmentation = False
+
+        # Initialize list of parallel data loaders
+        thread_mngr = multiprocessing.Manager()
+        in_queue = MultiprocessQueue(thread_mngr, type='Queue')  # if self.params['n_parallel_loaders'] > 1 else 'Pipe')
+        out_queue = MultiprocessQueue(thread_mngr, type='Queue')  # if self.params['n_parallel_loaders'] > 1 else 'Pipe')
+        # Create a queue per function
+        for i in range(self.params['n_parallel_loaders']):
+            # create process
+            new_process = multiprocessing.Process(target=dataLoad,
+                                                  args=('dataLoad_process_' + str(i),
+                                                        self.net, self.dataset, int(self.params['n_parallel_loaders'] * 1.5), [in_queue, out_queue]))
+            self.thread_list.append(new_process)  # store processes for terminating later
+            new_process.start()
+
+        it = 0
+        while True:
+            if self.set_split == 'train' and it % self.params['num_iterations'] == 0 and \
+                    not self.predict and self.params['random_samples'] == -1 and self.params['shuffle']:
+                silence = self.dataset.silence
+                self.dataset.silence = True
+                self.dataset.shuffleTraining()
+                self.dataset.silence = silence
+            if it % self.params['num_iterations'] == 0 and self.params['random_samples'] == -1:
+                self.dataset.resetCounters(set_name=self.set_split)
+            it += 1
+
+            # Checks if we are finishing processing the data split
+            init_sample = (it - 1) * self.params['batch_size']
+            final_sample = it * self.params['batch_size']
+            batch_size = self.params['batch_size']
+            # n_samples_split = eval("self.dataset.len_" + self.set_split)
+            n_samples_split = getattr(self.dataset, "len_" + self.set_split)
+            if final_sample >= n_samples_split:
+                final_sample = n_samples_split
+                batch_size = final_sample - init_sample
+                it = 0
+
+            # Recovers a batch of data
+            # random data selection
+            if self.params['random_samples'] > 0:
+                num_retrieve = min(self.params['random_samples'], self.params['batch_size'])
+                if self.temporally_linked:
+                    if self.first_idx == -1:
+                        self.first_idx = np.random.randint(0, n_samples_split - self.params['random_samples'], 1)[0]
+                        self.next_idx = self.first_idx
+                    indices = range(self.next_idx, self.next_idx + num_retrieve)
+                    self.next_idx += num_retrieve
+                else:
+                    indices = np.random.randint(0, n_samples_split, num_retrieve)
+                self.params['random_samples'] -= num_retrieve
+
+                # Prepare query data for parallel data loaders
+                query_data = ['indices', self.predict, self.set_split, [indices],
+                              self.params['normalization'], self.params['normalization_type'],
+                              self.params['mean_substraction'], data_augmentation]
+
+            # specific data selection
+            elif self.init_sample > -1 and self.final_sample > -1:
+                indices = range(self.init_sample, self.final_sample)
+
+                # Prepare query data for parallel data loaders
+                query_data = ['indices', self.predict, self.set_split, [indices],
+                              self.params['normalization'], self.params['normalization_type'],
+                              self.params['mean_substraction'], data_augmentation]
+
+            # consecutive data selection
+            else:
+                if self.predict:
+                    query_data = ['consecutive', self.predict, self.set_split, [init_sample, final_sample],
+                                  self.params['normalization'], self.params['normalization_type'],
+                                  self.params['mean_substraction'], data_augmentation]
+                else:
+                    query_data = ['consecutive', self.predict, self.set_split, [range(init_sample, final_sample)],
+                                  self.params['normalization'], self.params['normalization_type'],
+                                  self.params['mean_substraction'], data_augmentation]
+
+            # Insert data in queue
+            in_queue.put(query_data)
+
+            # Check if there is processed data in queue
+            while out_queue.qsize() > 0:
+                data = out_queue.get()
+                yield (data)
+
 
 class Data_Batch_Generator(object):
     """
@@ -129,8 +303,7 @@ class Data_Batch_Generator(object):
                  shuffle=True,
                  temporally_linked=False,
                  init_sample=-1,
-                 final_sample=-1,
-                 n_parallel_loaders=None):
+                 final_sample=-1):
         """
         Initializes the Data_Batch_Generator
         :param set_split: Split (train, val, test) to retrieve data
@@ -146,6 +319,7 @@ class Data_Batch_Generator(object):
         :param shuffle: Shuffle the training dataset
         :param temporally_linked: Indicates if we are using a temporally-linked model
         """
+
         self.set_split = set_split
         self.dataset = dataset
         self.net = net
@@ -193,7 +367,8 @@ class Data_Batch_Generator(object):
             init_sample = (it - 1) * self.params['batch_size']
             final_sample = it * self.params['batch_size']
             batch_size = self.params['batch_size']
-            n_samples_split = eval("self.dataset.len_" + self.set_split)
+            # n_samples_split = eval("self.dataset.len_" + self.set_split)
+            n_samples_split = getattr(self.dataset, "len_" + self.set_split)
             if final_sample >= n_samples_split:
                 final_sample = n_samples_split
                 batch_size = final_sample - init_sample
@@ -206,7 +381,7 @@ class Data_Batch_Generator(object):
                     if self.first_idx == -1:
                         self.first_idx = np.random.randint(0, n_samples_split - self.params['random_samples'], 1)[0]
                         self.next_idx = self.first_idx
-                    indices = range(self.next_idx, self.next_idx + num_retrieve)
+                    indices = list(range(self.next_idx, self.next_idx + num_retrieve))
                     self.next_idx += num_retrieve
                 else:
                     indices = np.random.randint(0, n_samples_split, num_retrieve)
@@ -232,7 +407,7 @@ class Data_Batch_Generator(object):
                     data = self.net.prepareData(X_batch, Y_batch)
 
             elif self.init_sample > -1 and self.final_sample > -1:
-                indices = range(self.init_sample, self.final_sample)
+                indices = list(range(self.init_sample, self.final_sample))
                 if self.predict:
                     X_batch = self.dataset.getX_FromIndices(self.set_split,
                                                             indices,
@@ -353,7 +528,9 @@ class Homogeneous_Data_Batch_Generator(object):
         batch_size = self.batch_size * joint_batches
         init_sample = (self.it - 1) * batch_size
         final_sample = self.it * batch_size
-        n_samples_split = eval("self.dataset.len_" + self.set_split)
+        # n_samples_split = eval("self.dataset.len_" + self.set_split)
+        n_samples_split = getattr(self.dataset, "len_" + self.set_split)
+
         if final_sample >= n_samples_split:
             final_sample = n_samples_split
             batch_size = final_sample - init_sample
@@ -432,7 +609,7 @@ class Dataset(object):
 
         # Data loading parameters
         # Lock for threads synchronization
-        #self.__lock_read = threading.Lock()
+        # self.__lock_read = threading.Lock()
 
         # Indicators for knowing if the data [X, Y] has been loaded for each data split
         self.loaded_train = [False, False]
@@ -508,6 +685,7 @@ class Dataset(object):
         self.text_offset = dict()  # number of timesteps that the text is shifted (to the right)
         self.fill_text = dict()  # text padding mode
         self.fill_text_char = dict()  # text padding mode
+        self.label_smoothing = dict()  # Epsilon value for label smoothing. See arxiv.org/abs/1512.00567.
         self.pad_on_batch = dict()  # text padding mode: If pad_on_batch, the sample will have the maximum length
         # of the current batch. Else, it will have a fixed length (max_text_len)
         self.words_so_far = dict()  # if True, each sample will be represented as the complete set of words until
@@ -579,10 +757,10 @@ class Dataset(object):
         shuffled_order = random.sample([i for i in range(num)], num)
 
         # Process each input sample
-        for id in self.X_train.keys():
+        for id in list(self.X_train):
             self.X_train[id] = [self.X_train[id][s] for s in shuffled_order]
         # Process each output sample
-        for id in self.Y_train.keys():
+        for id in list(self.Y_train):
             self.Y_train[id] = [self.Y_train[id][s] for s in shuffled_order]
 
         if not self.silence:
@@ -599,30 +777,36 @@ class Dataset(object):
 
         # Sort outputs by number of occurrences
         samples = None
-        exec ('samples = self.Y_' + set_name)
+        # exec ('samples = self.Y_' + set_name)
+        samples = getattr(self, 'Y_' + set_name)
         count = Counter(samples[id_out])
-        most_frequent = sorted(count.items(), key=lambda x: x[1], reverse=True)[:n_top]
+        most_frequent = sorted(list(iteritems(count)), key=lambda x: x[1], reverse=True)[:n_top]
         most_frequent = [m[0] for m in most_frequent]
 
         # Select top samples
         kept = []
-        for i, s in enumerate(samples[id_out]):
+        for i, s in list(enumerate(samples[id_out])):
             if s in most_frequent:
                 kept.append(i)
 
         # Remove non-top samples
         # Inputs
         ids = None
-        exec ('ids = self.X_' + set_name + '.keys()')
+        # exec ('ids = list(self.X_' + set_name + ')')
+        ids = list(getattr(self, 'X_' + set_name))
         for id in ids:
-            exec ('self.X_' + set_name + '[' + id + '] = [self.X_' + set_name + '[id][k] for k in kept]')
+            # exec ('self.X_' + set_name + '[' + id + '] = [self.X_' + set_name + '[id][k] for k in kept]')
+            setattr(self, 'X_' + set_name + '[' + id + ']', [getattr(self, 'X_' + set_name + '[' + id + '][' + k + ']') for k in kept])
         # Outputs
-        exec ('ids = self.Y_' + set_name + '.keys()')
+        # exec ('ids = list(self.Y_' + set_name + ')')
+        ids = list(getattr(self, 'Y_' + set_name))
         for id in ids:
-            exec ('self.Y_' + set_name + '[' + id + '] = [self.Y_' + set_name + '[id][k] for k in kept]')
-        new_len = len(samples[id_out])
-        exec ('self.len_' + set_name + ' = new_len')
+            # exec ('self.Y_' + set_name + '[' + id + '] = [self.Y_' + set_name + '[id][k] for k in kept]')
+            setattr(self, 'Y_' + set_name + '[' + id + ']', [getattr(self, 'Y_' + set_name + '[' + id + '][' + k + ']') for k in kept])
 
+        new_len = len(samples[id_out])
+        # exec ('self.len_' + set_name + ' = new_len')
+        setattr(self, 'len_' + set_name, new_len)
         self.__checkLengthSet(set_name)
 
         logging.info(str(new_len) + ' samples remaining after removal.')
@@ -642,7 +826,8 @@ class Dataset(object):
             self.last_test = 0
         else:
             self.__checkSetName(set_name)
-            exec ('self.last_' + set_name + '=0')
+            # exec ('self.last_' + set_name + '=0')
+            setattr(self, 'last_' + set_name, 0)
 
     def setSilence(self, silence):
         """
@@ -682,7 +867,7 @@ class Dataset(object):
         self.__checkSetName(set_name)
 
         # Insert type and id of input data
-        keys_X_set = eval('self.X_raw_' + set_name + '.keys()')
+        keys_X_set = list(getattr(self, 'X_raw_' + set_name))
         if id not in self.ids_inputs or overwrite_split:
             self.ids_inputs.append(id)
             self.types_inputs.append(type)
@@ -696,8 +881,17 @@ class Dataset(object):
                 'The input type "' + type + '" is not implemented. The list of valid types are the following: ' + str(
                     self.__accepted_types_inputs))
 
-        exec ('self.X_raw_' + set_name + '[id] = path_list')
-        exec ('self.loaded_raw_' + set_name + '[0] = True')
+        # exec ('self.X_raw_' + set_name + '[id] = path_list')
+        # exec ('self.loaded_raw_' + set_name + '[0] = True')
+        aux_dict = getattr(self, 'X_raw_' + set_name)
+        aux_dict[id] = path_list
+        setattr(self, 'X_raw_' + set_name, aux_dict)
+        del aux_dict
+
+        aux_list = getattr(self, 'loaded_raw_' + set_name)
+        aux_list[0] = True
+        setattr(self, 'loaded_raw_' + set_name, aux_list)
+        del aux_list
         if not self.silence:
             logging.info('Loaded "' + set_name + '" set inputs of type "' + type + '" with id "' + id + '".')
 
@@ -710,7 +904,8 @@ class Dataset(object):
                  pad_on_batch=True, build_vocabulary=False, max_words=0, words_so_far=False,  # 'text'
                  bpe_codes=None, separator='@@', # 'text'
                  feat_len=1024,  # 'image-features' / 'video-features'
-                 max_video_len=26  # 'video'
+                 max_video_len=26,  # 'video'
+                 sparse=False,  # 'binary'
                  ):
         """
         Loads a list which can contain all samples from either the 'train', 'val', or
@@ -782,7 +977,7 @@ class Dataset(object):
         if img_size_crop is None:
             img_size_crop = [227, 227, 3]
         # Insert type and id of input data
-        keys_X_set = eval('self.X_' + set_name + '.keys()')
+        keys_X_set = list(getattr(self, 'X_' + set_name))
         if id not in self.ids_inputs:
             self.ids_inputs.append(id)
             self.types_inputs.append(type)
@@ -825,8 +1020,9 @@ class Dataset(object):
                                                 feat_len)
         elif type == 'categorical':
             self.setClasses(path_list, id)
-            data = self.preprocessCategorical(path_list, id,
-                                              sample_weights=True if sample_weights and set_name == 'train' else False)
+            data = self.preprocessCategorical(path_list, id)
+        elif type == 'categorical_raw':
+            data = self.preprocessIDs(path_list, id, set_name)
         elif type == 'binary':
             data = self.preprocessBinary(path_list, id, sparse)
         elif type == 'id':
@@ -841,19 +1037,33 @@ class Dataset(object):
 
     def __setInput(self, set, set_name, type, id, overwrite_split, add_additional):
         if add_additional:
-            exec ('self.X_' + set_name + '[id] += set')
+            # exec ('self.X_' + set_name + '[id] += set'
+            aux_dict = getattr(self, 'X_' + set_name)
+            aux_dict[id] += set
+            setattr(self, 'X_' + set_name, aux_dict)
         else:
-            exec ('self.X_' + set_name + '[id] = set')
-        exec ('self.loaded_' + set_name + '[0] = True')
+            # exec ('self.X_' + set_name + '[id] = set')
+            aux_dict = getattr(self, 'X_' + set_name)
+            aux_dict[id] = set
+            setattr(self, 'X_' + set_name, aux_dict)
+        del aux_dict
+
+        # exec ('self.loaded_' + set_name + '[0] = True')
+        aux_list = getattr(self, 'loaded_' + set_name)
+        aux_list[0] = True
+        setattr(self, 'loaded_' + set_name, aux_list)
+        del aux_list
+
         if id not in self.optional_inputs:
-            exec ('self.len_' + set_name + ' = len(self.X_' + set_name + '[id])')
+
+            # exec ('self.len_' + set_name + ' = len(self.X_' + set_name + '[id])')
+            setattr(self, 'len_' + set_name, len(getattr(self, 'X_' + set_name)[id]))
             if not overwrite_split and not add_additional:
                 self.__checkLengthSet(set_name)
 
         if not self.silence:
             logging.info(
-                'Loaded "' + set_name + '" set inputs of type "' + type + '" with id "' + id + '" and length ' + str(
-                    eval('self.len_' + set_name)) + '.')
+                'Loaded "' + set_name + '" set inputs of type "' + type + '" with id "' + id + '" and length ' + str(getattr(self, 'len_' + set_name)) + '.')
 
     def replaceInput(self, data, set_name, type, id):
         '''
@@ -863,12 +1073,19 @@ class Dataset(object):
 
     def removeInput(self, set_name, id='label', type='categorical'):
         # Ensure that the output exists before removing it
-        keys_X_set = eval('self.X_' + set_name + '.keys()')
+        # eval('list(self.X_' + set_name + ')')
+        keys_X_set =  getattr(self, 'X_' + set_name)
         if id in self.ids_inputs:
             ind_remove = self.ids_inputs.index(id)
             del self.ids_inputs[ind_remove]
             del self.types_inputs[ind_remove]
-            exec ('del self.X_' + set_name + '[id]')
+            # exec ('del self.X_' + set_name + '[id]')
+
+            aux_dict = getattr(self, 'X_' + set_name)
+            del aux_dict[id]
+            setattr(self,  'X_' + set_name, aux_dict)
+            del aux_dict
+
         elif id not in keys_X_set:
             raise Exception('An input with id "' + id + '" does not exist in the Database.')
         if not self.silence:
@@ -900,7 +1117,8 @@ class Dataset(object):
         self.__checkSetName(set_name)
 
         # Insert type and id of input data
-        keys_Y_set = eval('self.Y_raw_' + set_name + '.keys()')
+        # eval('list(self.Y_raw_' + set_name + ')')
+        keys_Y_set = list(getattr(self, 'Y_raw_' + set_name))
         if id not in self.ids_inputs:
             self.ids_inputs.append(id)
             self.types_inputs.append(type)
@@ -915,17 +1133,43 @@ class Dataset(object):
                 'The input type "' + type + '" is not implemented. The list of valid types are the following: ' + str(
                     self.__accepted_types_inputs))
 
-        exec ('self.Y_raw_' + set_name + '[id] = path_list')
-        exec ('self.loaded_raw_' + set_name + '[1] = True')
+        # exec ('self.Y_raw_' + set_name + '[id] = path_list')
+        # exec ('self.loaded_raw_' + set_name + '[1] = True')
+        aux_dict = getattr(self, 'Y_raw_' + set_name)
+        aux_dict[id] = path_list
+        setattr(self, 'Y_raw_' + set_name, aux_dict)
+        del aux_dict
+
+        aux_list = getattr(self, 'loaded_raw_' + set_name)
+        aux_list[1] = True
+        setattr(self, 'loaded_raw_' + set_name, aux_list)
+        del aux_list
 
         if not self.silence:
             logging.info('Loaded "' + set_name + '" set inputs of type "' + type + '" with id "' + id + '".')
 
     def setOutput(self, path_list, set_name, type='categorical', id='label', repeat_set=1, overwrite_split=False,
-                  add_additional=False, sample_weights=False, tokenization='tokenize_none', max_text_len=0, offset=0, fill='end',
-                  fill_char='end', min_occ=0, pad_on_batch=True, words_so_far=False, build_vocabulary=False,
-                  bpe_codes=None, separator='@@', max_words=0, max_word_len=0, char_bpe=False, associated_id_in=None,
-                  num_poolings=None, sparse=False):
+                  add_additional=False,
+                  sample_weights=False,
+                  tokenization='tokenize_none',
+                  max_text_len=0,
+                  offset=0,
+                  fill='end',
+                  fill_char='end',
+                  max_words=0,
+                  max_word_len=0,
+                  char_bpe=False,
+                  min_occ=0,  # 'text'
+                  pad_on_batch=True,
+                  words_so_far=False,
+                  build_vocabulary=False,
+                  max_words=0,                  
+                  bpe_codes=None,
+                  separator='@@', 
+                  associated_id_in=None,
+                  num_poolings=None,  # '3DLabel' or '3DSemanticLabel'
+                  sparse=False,  # 'binary'
+                  ):
         """
         Loads a set of output data, usually (type=='categorical') referencing values in self.classes (starting from 0)
 
@@ -942,7 +1186,7 @@ class Dataset(object):
                                 the data with id that was already declared in the dataset
         :param add_additional: adds additional data to an already existent output ID
         :param sample_weights: switch on/off sample weights usage for the current output
-
+        :param label_smoothing: epsilon value for label smoothing. See arxiv.org/abs/1512.00567.
             # 'text'-related parameters
 
         :param tokenization: type of tokenization applied (must be declared as a method of this class)
@@ -979,7 +1223,8 @@ class Dataset(object):
         self.__checkSetName(set_name)
 
         # Insert type and id of output data
-        keys_Y_set = eval('self.Y_' + set_name + '.keys()')
+        #keys_Y_set = eval('list(self.Y_' + set_name + ')')
+        keys_Y_set = list(getattr(self, 'Y_' + set_name))
         if id not in self.ids_outputs:
             self.ids_outputs.append(id)
             self.types_outputs.append(type)
@@ -990,6 +1235,10 @@ class Dataset(object):
             raise NotImplementedError(
                 'The output type "' + type + '" is not implemented. The list of valid types are the following: ' + str(
                     self.__accepted_types_outputs))
+        if hasattr(self, 'label_smoothing'):
+            if self.label_smoothing.get(id) is None:
+                self.label_smoothing[id] = dict()
+            self.label_smoothing[id][set_name] = label_smoothing
 
         # Preprocess the output data depending on its type
         if type == 'categorical':
@@ -1022,27 +1271,45 @@ class Dataset(object):
 
     def __setOutput(self, labels, set_name, type, id, overwrite_split, add_additional):
         if add_additional:
-            exec ('self.Y_' + set_name + '[id] += labels')
+            # exec ('self.Y_' + set_name + '[id] += labels')
+            aux_dict = getattr(self, 'Y_' + set_name)
+            aux_dict[id] += labels
+            setattr(self, 'Y_' + set_name, aux_dict)
         else:
-            exec ('self.Y_' + set_name + '[id] = labels')
-        exec ('self.loaded_' + set_name + '[1] = True')
-        exec ('self.len_' + set_name + ' = len(self.Y_' + set_name + '[id])')
+            # exec ('self.Y_' + set_name + '[id] = labels')
+            aux_dict = getattr(self, 'Y_' + set_name)
+            aux_dict[id] = labels
+            setattr(self, 'Y_' + set_name, aux_dict)
+        del aux_dict
+
+        # exec ('self.loaded_' + set_name + '[1] = True')
+        # exec ('self.len_' + set_name + ' = len(self.Y_' + set_name + '[id])')
+        aux_list = getattr(self, 'loaded_' + set_name)
+        aux_list[1] = True
+        del aux_list
+        setattr(self, 'len_' + set_name, len(getattr(self, 'Y_' + set_name)[id]))
         if not overwrite_split and not add_additional:
             self.__checkLengthSet(set_name)
 
         if not self.silence:
             logging.info(
-                'Loaded "' + set_name + '" set outputs of type "' + type + '" with id "' + id + '" and length ' + str(
-                    eval('self.len_' + set_name)) + '.')
+                'Loaded "' + set_name + '" set outputs of type "' + type + '" with id "' + id + '" and length ' + str(getattr(self, 'len_' + set_name)) + '.')
 
     def removeOutput(self, set_name, id='label', type='categorical'):
         # Ensure that the output exists before removing it
-        keys_Y_set = eval('self.Y_' + set_name + '.keys()')
+        #keys_Y_set = eval('list(self.Y_' + set_name + ')')
+        keys_Y_set = list(getattr(self, 'Y_' + set_name))
         if id in self.ids_outputs:
             ind_remove = self.ids_outputs.index(id)
             del self.ids_outputs[ind_remove]
             del self.types_outputs[ind_remove]
-            exec ('del self.Y_' + set_name + '[id]')
+            # exec ('del self.Y_' + set_name + '[id]')
+
+            aux_dict = getattr(self, 'Y_' + set_name)
+            del aux_dict[id]
+            setattr(self,  'Y_' + set_name, aux_dict)
+            del aux_dict
+
         elif id not in keys_Y_set:
             raise Exception('An output with id "' + id + '" does not exist in the Database.')
         if not self.silence:
@@ -1145,7 +1412,7 @@ class Dataset(object):
         if sparse:
             labels = labels_list
         else:  # convert to sparse representation
-            labels = [[str(i) for i, x in enumerate(y) if x == 1] for y in labels_list]
+            labels = [[str(i) for i, x in list(enumerate(y)) if x == 1] for y in labels_list]
         self.sparse_binary[id] = True
 
         unique_label_set = []
@@ -1168,9 +1435,9 @@ class Dataset(object):
         if sparse:  # convert sparse into numpy array
             n_samples = len(y_raw)
             voc = self.vocabulary[id]['words2idx']
-            num_words = len(voc.keys())
+            num_words = len(list(voc))
             y = np.zeros((n_samples, num_words), dtype=np.uint8)
-            for i, y_ in enumerate(y_raw):
+            for i, y_ in list(enumerate(y_raw)):
                 for elem in y_:
                     y[i, voc[elem]] = 1
         else:
@@ -1267,7 +1534,7 @@ class Dataset(object):
         n_batch = len(X)
         features = np.zeros(tuple([n_batch] + feat_len))
 
-        for i, feat in enumerate(X):
+        for i, feat in list(enumerate(X)):
             if not external:
                 feat = self.path + '/' + feat
 
@@ -1424,18 +1691,15 @@ class Dataset(object):
 
         counters.append(counter)
         sentence_counts.append(sentence_count)
-        # logging.info("\t %d unique words in %d sentences with a total of %d words." %
-        #      (len(counter), sentence_count, sum(counter.values())))
-
         combined_counter = reduce(add, counters)
         if not self.silence:
             logging.info("\t Total: %d unique words in %d sentences with a total of %d words." %
-                         (len(combined_counter), sum(sentence_counts), sum(combined_counter.values())))
+                         (len(combined_counter), sum(sentence_counts), sum(list(combined_counter.values()))))
 
         # keep only words with less than 'min_occ' occurrences
         if min_occ > 1:
             removed = 0
-            for k in combined_counter.keys():
+            for k in list(combined_counter):
                 if combined_counter[k] < min_occ:
                     del combined_counter[k]
                     removed += 1
@@ -1454,14 +1718,14 @@ class Dataset(object):
                              "%2.1f%% of the text."
                              % (n_words,
                                 100.0 * sum([count for word, count in vocab_count]) /
-                                sum(combined_counter.values())))
+                                sum(list(combined_counter.values()))))
         else:
             if not self.silence:
                 logging.info("Creating dictionary of all words")
             vocab_count = counter.most_common()
 
         dictionary = {}
-        for i, (word, count) in enumerate(vocab_count):
+        for i, (word, count) in list(enumerate(vocab_count)):
             if is_val:
                 dictionary[word] = int(word)
             else:
@@ -1470,14 +1734,14 @@ class Dataset(object):
                 dictionary[word] += len(self.extra_words)
 
         if use_extra_words:
-            for w, k in self.extra_words.iteritems():
+            for w, k in iteritems(self.extra_words):
                 dictionary[w] = k
 
         # Store dictionary and append to previously existent if needed.
         if id not in self.vocabulary:
             self.vocabulary[id] = dict()
             self.vocabulary[id]['words2idx'] = dictionary
-            inv_dictionary = {v: k for k, v in dictionary.items()}
+            inv_dictionary = {v: k for k, v in list(iteritems(dictionary))}
             self.vocabulary[id]['idx2words'] = inv_dictionary
 
             self.vocabulary_len[id] = len(vocab_count)
@@ -1485,8 +1749,8 @@ class Dataset(object):
                 self.vocabulary_len[id] += len(self.extra_words)
 
         else:
-            old_keys = self.vocabulary[id]['words2idx'].keys()
-            new_keys = dictionary.keys()
+            old_keys = list(self.vocabulary[id]['words2idx'])
+            new_keys = list(dictionary)
             added = 0
             for key in new_keys:
                 if key not in old_keys:
@@ -1494,7 +1758,7 @@ class Dataset(object):
                     self.vocabulary_len[id] += 1
                     added += 1
 
-            inv_dictionary = {v: k for k, v in self.vocabulary[id]['words2idx'].items()}
+            inv_dictionary = {v: k for k, v in list(iteritems(self.vocabulary[id]['words2idx']))}
             self.vocabulary[id]['idx2words'] = inv_dictionary
 
             if not self.silence:
@@ -1514,22 +1778,22 @@ class Dataset(object):
 
         # Pick the first vocabulary as reference
         vocab_ref = self.vocabulary[ids[0]]['words2idx']
-        next_idx = max(vocab_ref.values()) + 1
+        next_idx = max(list(vocab_ref.values())) + 1
 
         # Merge all vocabularies to the reference
         for i in range(1, len(ids)):
             id = ids[i]
             vocab = self.vocabulary[id]['words2idx']
-            for w in vocab.keys():
-                if w not in vocab_ref.keys():
+            for w in list(vocab):
+                if w not in list(vocab_ref):
                     vocab_ref[w] = next_idx
                     next_idx += 1
 
         # Also build idx2words
         self.vocabulary[ids[0]]['words2idx'] = vocab_ref
-        inv_dictionary = {v: k for k, v in vocab_ref.items()}
+        inv_dictionary = {v: k for k, v in list(iteritems(vocab_ref))}
         self.vocabulary[ids[0]]['idx2words'] = inv_dictionary
-        self.vocabulary_len[ids[0]] = len(self.vocabulary[ids[0]]['words2idx'].keys())
+        self.vocabulary_len[ids[0]] = len(list(self.vocabulary[ids[0]]['words2idx']))
 
         # Insert in all ids
         for i in range(1, len(ids)):
@@ -1737,7 +2001,7 @@ class Dataset(object):
             label3D = np.zeros((nClasses, h, w), dtype=np.float32)
 
             # Insert 1s in the corresponding positions for each class
-            for class_id, colour in classes_to_colour.iteritems():
+            for class_id, colour in iteritems(classes_to_colour):
                 # indices = np.where(np.all(labeled_im == colour, axis=-1))
                 indices = np.where(labeled_im == class_id)
                 num_vals = len(indices[0])
@@ -1813,7 +2077,7 @@ class Dataset(object):
         # uint8.max: 255
         # uint16.max: 65535
         # uint32.max: 4294967295
-        vocabulary_size = len(vocab.keys())
+        vocabulary_size = len(list(vocab))
 
         if vocabulary_size < 255:
             dtype_text = 'uint8'
@@ -1870,7 +2134,7 @@ class Dataset(object):
                     offset_j = 0
 
                 if words_so_far:
-                    for j, w in zip(range(len_j), x[:len_j]):
+                    for j, w in list(zip(range(len_j), x[:len_j])):
                         next_w = vocab.get(w, next_w=vocab['<unk>'])
                         for k in range(j, len_j):
                             X_out[i, k + offset_j, j + offset_j] = next_w
@@ -1878,10 +2142,11 @@ class Dataset(object):
                         X_mask[i, j + offset_j, j + 1 + offset_j] = 1  # add additional 1 for the <eos> symbol
 
                 else:
-                    for j, w in zip(range(len_j), x[:len_j]):
+                    for j, w in list(zip(range(len_j), x[:len_j])):
                         X_out[i, j + offset_j] = vocab.get(w, vocab['<unk>'])
                         X_mask[i, j + offset_j] = 1  # fill mask
                     X_mask[i, len_j + offset_j] = 1  # add additional 1 for the <eos> symbol
+
                 if offset > 0:  # Move the text to the right -> null symbol
                     if words_so_far:
                         for k in range(len_j):
@@ -1893,6 +2158,7 @@ class Dataset(object):
                         X_out[i] = np.append([vocab['<null>']] * offset, X_out[i, :-offset])
                         X_mask[i] = np.append([0] * offset, X_mask[i, :-offset])
             X_out = (np.asarray(X_out, dtype=dtype_text), np.asarray(X_mask, dtype='int8'))
+
         return X_out
 
     def loadTextCharacter(self, X, vocabularies, max_len, max_word_len, fill, fillChar, pad_on_batch, loading_X=False):
@@ -2069,7 +2335,7 @@ class Dataset(object):
         X_out = (X_out, X_mask)
         return X_out
 
-    def loadTextOneHot(self, X, vocabularies, vocabulary_len, max_len, max_word_len, offset, fill, fill_char, pad_on_batch, words_so_far,
+    def loadTextOneHot(self, X, vocabularies, vocabulary_len, max_len, offset, fill, pad_on_batch, words_so_far,
                        sample_weights=False, loading_X=False):
 
         """
@@ -2100,8 +2366,9 @@ class Dataset(object):
         else:
             y_aux = np.zeros(list(y[0].shape) + [vocabulary_len]).astype(np.uint8)
             for idx in range(y[0].shape[0]):
-                y_aux[idx] = to_categorical(y[0][idx], vocabulary_len).astype(
-                    np.uint8)
+                y_aux[idx] = to_categorical(y[0][idx], vocabulary_len).astype(np.uint8)
+                if label_smoothing > 0.:
+                    y_aux[idx] = ((1 - label_smoothing) * y_aux[idx] + (label_smoothing / vocabulary_len)).astype(np.float32)
             if sample_weights:
                 y_aux = (y_aux, y[1])  # join data and mask
         return y_aux
@@ -2114,9 +2381,12 @@ class Dataset(object):
         """
         if not self.silence:
             logging.info("Loading source -- target mapping.")
-        self.mapping = pk.load(open(path_list, 'rb'))
+        if sys.version_info.major == 3:
+            self.mapping = pk.load(open(path_list, 'rb'), encoding='utf-8')
+        else:
+            self.mapping = pk.load(open(path_list, 'rb'))
         if not self.silence:
-            logging.info("Source -- target mapping loaded with a total of %d words." % len(self.mapping.keys()))
+            logging.info("Source -- target mapping loaded with a total of %d words." % len(list(self.mapping)))
 
     # ------------------------------------------------------- #
     #       Tokenizing functions
@@ -2454,10 +2724,11 @@ class Dataset(object):
             if this_last >= n_videos:
                 v = this_last % n_videos
                 this_last = v
-            idx[v] = int(sum(eval('self.X_' + set_name + '[id][:this_last]')))
+            # idx[v] = int(sum(eval('self.X_' + set_name + '[id][:this_last]')))
+            idx[v] = int(sum(getattr(self, 'Y_' + set_name)[id][:this_last]))
 
         # load images from each video
-        for enum, (n, i) in enumerate(zip(n_frames, idx)):
+        for enum, (n, i) in list(enumerate(zip(n_frames, idx))):
             paths = self.paths_frames[id][set_name][i:i + n]
             daRandomParams = None
             if dataAugmentation:
@@ -2501,8 +2772,8 @@ class Dataset(object):
         data_augmentation_types = self.inputs_data_augmentation_types[id]
 
         # load features from selected paths
-        for i, vid_paths in enumerate(selected_frames):
-            for j, feat in enumerate(vid_paths):
+        for i, vid_paths in list(enumerate(selected_frames)):
+            for j, feat in list(enumerate(vid_paths)):
                 if not external:
                     feat = self.path + '/' + feat
 
@@ -2544,7 +2815,7 @@ class Dataset(object):
 
         # select subset of max_len from n_frames[i]
         selected_frames = [0 for i_nvid in range(n_videos)]
-        for enum, (n, i) in enumerate(zip(n_frames, idx)):
+        for enum, (n, i) in list(enumerate(zip(n_frames, idx))):
             paths = self.paths_frames[id][set_name][i:i + n]
 
             if data_augmentation and 'random_selection' in data_augmentation_types:  # apply random frames selection
@@ -2570,7 +2841,7 @@ class Dataset(object):
             idx[v] = int(sum(eval('self.X_' + set_name + '[id][indices[v]]')))
 
         # load images from each video
-        for enum, (n, i) in enumerate(zip(n_frames, idx)):
+        for enum, (n, i) in list(enumerate(zip(n_frames, idx))):
             paths = self.paths_frames[id][set_name][i:i + n]
             daRandomParams = None
             if dataAugmentation:
@@ -2692,7 +2963,7 @@ class Dataset(object):
 
         assoc_id_in = self.id_in_3DLabel[id]
         classes_to_colour = self.semantic_classes[id]
-        nClasses = len(classes_to_colour.keys())
+        nClasses = len(list(classes_to_colour))
         img_size = self.img_size[assoc_id_in]
         size_crop = self.img_size_crop[assoc_id_in]
         num_poolings = self.num_poolings_model[id]
@@ -2738,7 +3009,7 @@ class Dataset(object):
             label3D = np.zeros((nClasses, h, w), dtype=np.float32)
 
             # Insert 1s in the corresponding positions for each class
-            for class_id, colour in classes_to_colour.iteritems():
+            for class_id, colour in iteritems(classes_to_colour):
                 # indices = np.where(np.all(labeled_im == colour, axis=-1))
                 indices = np.where(labeled_im == class_id)
                 num_vals = len(indices[0])
@@ -2768,7 +3039,7 @@ class Dataset(object):
 
         out_pred = []
 
-        for pred, id_out in zip(predictions, ids_out):
+        for pred, id_out in list(zip(predictions, ids_out)):
 
             assoc_id_in = self.id_in_3DLabel[id_out]
             in_size = self.img_size_crop[assoc_id_in]
@@ -2779,7 +3050,7 @@ class Dataset(object):
             pred = np.reshape(pred, (-1, in_size[0], in_size[1]))
 
             new_pred = np.zeros(tuple([n_classes] + out_size[0:2]))
-            for pos, p in enumerate(pred):
+            for pos, p in list(enumerate(pred)):
                 new_pred[pos] = misc.imresize(p, tuple(out_size[0:2]))
 
             new_pred = np.reshape(new_pred, (-1, out_size[0] * out_size[1]))
@@ -3077,6 +3348,7 @@ class Dataset(object):
     def loadImages(self, images, id, normalization_type='(-1)-1',
                    normalization=True, meanSubstraction=False,
                    dataAugmentation=True, daRandomParams=None,
+                   useBGR=False,
                    external=False, loaded=False):
         """
         Loads a set of images from disk.
@@ -3116,10 +3388,11 @@ class Dataset(object):
             # Transpose dimensions
             if len(self.img_size[id]) == 3:  # if it is a 3D image
                 # Convert RGB to BGR
-                if self.img_size[id][2] == 3:  # if has 3 channels
-                    train_mean = train_mean[:, :, ::-1]
-                if keras.backend.image_data_format() == 'channels_first':
-                    train_mean = train_mean.transpose(2, 0, 1)
+                if useBGR:
+                    if self.img_size[id][2] == 3:  # if has 3 channels
+                        train_mean = train_mean[:, :, ::-1]
+                    if keras.backend.image_data_format() == 'channels_first':
+                        train_mean = train_mean.transpose(2, 0, 1)
 
             # Also normalize training mean image if we are applying normalization to images
             if normalization:
@@ -3207,11 +3480,11 @@ class Dataset(object):
                 try:
                     im = im[left[0]:right[0], left[1]:right[1], :]
                 except:
-                    print '------- ERROR -------'
-                    print left
-                    print right
-                    print im.shape
-                    print imname
+                    logging.error('------- ERROR -------')
+                    logging.error(left)
+                    logging.error(right)
+                    logging.error(im.shape)
+                    logging.error(imname)
                     raise Exception('Error with image ' + imname)
 
                 # Randomly flip (with a certain probability)
@@ -3235,10 +3508,11 @@ class Dataset(object):
             # Permute dimensions
             if len(self.img_size[id]) == 3:
                 # Convert RGB to BGR
-                if self.img_size[id][2] == 3:  # if has 3 channels
-                    im = im[:, :, ::-1]
-                if keras.backend.image_data_format() == 'channels_first':
-                    im = im.transpose(2, 0, 1)
+                if useBGR:
+                    if self.img_size[id][2] == 3:  # if has 3 channels
+                        im = im[:, :, ::-1]
+                    if keras.backend.image_data_format() == 'channels_first':
+                        im = im.transpose(2, 0, 1)
             else:
                 pass
 
@@ -3321,7 +3595,8 @@ class Dataset(object):
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 0)
 
-        if final > eval('self.len_' + set_name):
+        # if final > eval('self.len_' + set_name):
+        if final > getattr(self, 'len_' + set_name):
             raise Exception('"final" index must be smaller than the number of samples in the set.')
         if init < 0:
             raise Exception('"init" index must be equal or greater than 0.')
@@ -3329,17 +3604,19 @@ class Dataset(object):
             raise Exception('"init" index must be smaller than "final" index.')
 
         X = []
-        for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
+        for id_in, type_in in list(zip(self.ids_inputs, self.types_inputs)):
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:
-                    x = eval('self.X_' + set_name + '[id_in][init:final]')
+                    # x = eval('self.X_' + set_name + '[id_in][init:final]')
+                    x = getattr(self, 'X_' + set_name)[id_in][init:final]
                     assert len(x) == (final - init)
                 except:
                     x = [[]] * (final - init)
                     ghost_x = True
             else:
-                x = eval('self.X_' + set_name + '[id_in][init:final]')
+                # x = eval('self.X_' + set_name + '[id_in][init:final]')
+                x = getattr(self, 'X_' + set_name)[id_in][init:final]
 
             if not debug and not ghost_x:
                 if type_in == 'raw-image':
@@ -3421,22 +3698,24 @@ class Dataset(object):
 
         # Recover input samples
         X = []
-        for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
+        for id_in, type_in in list(zip(self.ids_inputs, self.types_inputs)):
             if id_in in self.optional_inputs:
                 try:
                     if surpassed:
-                        x = eval('self.X_' + set_name + '[id_in][last:]') + eval(
-                            'self.X_' + set_name + '[id_in][0:new_last]')
+                        # x = eval('self.X_' + set_name + '[id_in][last:]') + eval('self.X_' + set_name + '[id_in][0:new_last]')
+                        x = getattr(self, 'X_' + set_name)[id_in][last:] + getattr(self, 'X_' + set_name)[id_in][0:new_last]
                     else:
-                        x = eval('self.X_' + set_name + '[id_in][last:new_last]')
+                        # x = eval('self.X_' + set_name + '[id_in][last:new_last]')
+                        x = getattr(self, 'X_' + set_name)[id_in][last:new_last]
                 except:
                     x = []
             else:
                 if surpassed:
-                    x = eval('self.X_' + set_name + '[id_in][last:]') + eval(
-                        'self.X_' + set_name + '[id_in][0:new_last]')
+                    # x = eval('self.X_' + set_name + '[id_in][last:]') + eval('self.X_' + set_name + '[id_in][0:new_last]')
+                    x = getattr(self, 'X_' + set_name)[id_in][last:] + getattr(self, 'X_' + set_name)[id_in][0:new_last]
                 else:
-                    x = eval('self.X_' + set_name + '[id_in][last:new_last]')
+                    # x = eval('self.X_' + set_name + '[id_in][last:new_last]')
+                    x = getattr(self, 'X_' + set_name)[id_in][last:new_last]
 
             # Pre-process inputs
             if not debug:
@@ -3481,7 +3760,6 @@ class Dataset(object):
                     nClasses = len(self.dic_classes[id_in])
                     # load_sample_weights = self.sample_weights[id_out][set_name]
                     x = self.loadCategorical(x, nClasses)
-                    print x.shape
                 elif type_in == 'categorical_raw':
                     x = np.array(x)
                 elif type_in == 'binary':
@@ -3490,11 +3768,14 @@ class Dataset(object):
 
         # Recover output samples
         Y = []
-        for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
+        for id_out, type_out in list(zip(self.ids_outputs, self.types_outputs)):
             if surpassed:
-                y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
+                # y = eval('self.Y_' + set_name + '[id_out][last:]') + eval('self.Y_' + set_name + '[id_out][0:new_last]')
+                y = getattr(self, 'Y_' + set_name)[id_out][last:] + getattr(self, 'Y_' + set_name)[id_out][0:new_last]
+
             else:
-                y = eval('self.Y_' + set_name + '[id_out][last:new_last]')
+                # y = eval('self.Y_' + set_name + '[id_out][last:new_last]')
+                y = getattr(self, 'Y_' + set_name)[id_out][last:new_last]
 
             # Pre-process outputs
             if not debug:
@@ -3510,10 +3791,12 @@ class Dataset(object):
                     nClasses = len(self.classes[id_out])
                     assoc_id_in = self.id_in_3DLabel[id_out]
                     if surpassed:
-                        imlist = eval('self.X_' + set_name + '[assoc_id_in][last:]') + eval(
-                            'self.X_' + set_name + '[assoc_id_in][0:new_last]')
+                        # imlist = eval('self.X_' + set_name + '[assoc_id_in][last:]') + eval('self.X_' + set_name + '[assoc_id_in][0:new_last]')
+                        imlist = getattr(self, 'X_' + set_name)[assoc_id_in][last:] + getattr(self, 'X_' + set_name)[assoc_id_in][0:new_last]
+
                     else:
-                        imlist = eval('self.X_' + set_name + '[assoc_id_in][last:new_last]')
+                        # imlist = eval('self.X_' + set_name + '[assoc_id_in][last:new_last]')
+                        imlist = getattr(self, 'X_' + set_name)[assoc_id_in][last:new_last]
 
                     y = self.load3DLabels(y, nClasses, dataAugmentation, daRandomParams,
                                           self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
@@ -3523,26 +3806,34 @@ class Dataset(object):
                     classes_to_colour = self.semantic_classes[id_out]
                     assoc_id_in = self.id_in_3DLabel[id_out]
                     if surpassed:
-                        imlist = eval('self.X_' + set_name + '[assoc_id_in][last:]') + eval(
-                            'self.X_' + set_name + '[assoc_id_in][0:new_last]')
+                        # imlist = eval('self.X_' + set_name + '[assoc_id_in][last:]') + eval('self.X_' + set_name + '[assoc_id_in][0:new_last]')
+                        imlist = getattr(self, 'X_' + set_name)[assoc_id_in][last:] + getattr(self, 'X_' + set_name)[assoc_id_in][0:new_last]
+
                     else:
-                        imlist = eval('self.X_' + set_name + '[assoc_id_in][last:new_last]')
+                        # imlist = eval('self.X_' + set_name + '[assoc_id_in][last:new_last]')
+                        imlist = getattr(self, 'X_' + set_name)[assoc_id_in][last:new_last]
 
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, daRandomParams,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
                 elif type_out == 'text' or type_out == 'dense_text':
-                    y = self.loadText(y, self.vocabulary[id_out], self.max_text_len[id_out][set_name], #0 maxwordlen?
-                                      self.text_offset[id_out], fill=self.fill_text[id_out],
-                                      pad_on_batch=self.pad_on_batch[id_out], words_so_far=self.words_so_far[id_out], loading_X=False)
+                    y = self.loadText(y, self.vocabulary[id_out], self.max_text_len[id_out][set_name], self.text_offset[id_out],
+                                      fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
+                                      words_so_far=self.words_so_far[id_out], loading_X=False)
                     # Use whole sentence as class (classifier model)
                     if self.max_text_len[id_out][set_name] == 0:
                         y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
                     elif type_out == 'text':
-                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
+                        if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                            y_aux_type = np.float32
+                        else:
+                            y_aux_type = np.uint8
+                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(y_aux_type)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(np.uint8)
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(y_aux_type)
+                            if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                                y_aux[idx] = ((1. - self.label_smoothing[id_out][set_name]) * y_aux[idx] + (self.label_smoothing[id_out][set_name] / self.vocabulary_len[id_out]))
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
                         y = y_aux
@@ -3583,16 +3874,20 @@ class Dataset(object):
 
         # Recover input samples
         X = []
-        for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
+        k = list(k)
+        for id_in, type_in in list(zip(self.ids_inputs, self.types_inputs)):
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:
-                    x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                    # x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                    x = [getattr(self, 'X_' + set_name)[id_in][index] for index in k]
+
                 except:
                     x = [[]] * len(k)
                     ghost_x = True
             else:
-                x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                # x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                x = [getattr(self, 'X_' + set_name)[id_in][index] for index in k]
 
             # if(set_name=='val'):
             #    logging.info(x)
@@ -3649,8 +3944,9 @@ class Dataset(object):
 
         # Recover output samples
         Y = []
-        for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
-            y = [eval('self.Y_' + set_name + '[id_out][index]') for index in k]
+        for id_out, type_out in list(zip(self.ids_outputs, self.types_outputs)):
+            # y = [eval('self.Y_' + set_name + '[id_out][index]') for index in k]
+            y = [getattr(self, 'Y_' + set_name)[id_out][index] for index in k]
 
             # if(set_name=='val'):
             #    logging.info(y)
@@ -3667,7 +3963,9 @@ class Dataset(object):
                 elif type_out == '3DLabel':
                     nClasses = len(self.classes[id_out])
                     assoc_id_in = self.id_in_3DLabel[id_out]
-                    imlist = [eval('self.X_' + set_name + '[assoc_id_in][index]') for index in k]
+                    # imlist = [eval('self.X_' + set_name + '[assoc_id_in][index]') for index in k]
+                    imlist = [getattr(self, 'X_' + set_name)[assoc_id_in][index] for index in k]
+
                     y = self.load3DLabels(y, nClasses, dataAugmentation, daRandomParams,
                                           self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                           imlist)
@@ -3675,13 +3973,14 @@ class Dataset(object):
                     nClasses = len(self.classes[id_out])
                     classes_to_colour = self.semantic_classes[id_out]
                     assoc_id_in = self.id_in_3DLabel[id_out]
-                    imlist = [eval('self.X_' + set_name + '[assoc_id_in][index]') for index in k]
+                    # imlist = [eval('self.X_' + set_name + '[assoc_id_in][index]') for index in k]
+                    imlist = [getattr(self, 'X_' + set_name)[assoc_id_in][index] for index in k]
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, daRandomParams,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
                 elif type_out == 'text' or type_out == 'dense_text':
                     y = self.loadText(y, self.vocabulary[id_out],
-                                      self.max_text_len[id_out][set_name], self.text_offset[id_out], # self.max_word_len[id_out][set_name],
+                                      self.max_text_len[id_out][set_name], self.text_offset[id_out],
                                       fill=self.fill_text[id_out], pad_on_batch=self.pad_on_batch[id_out],
                                       words_so_far=self.words_so_far[id_out], loading_X=False)
 
@@ -3690,10 +3989,15 @@ class Dataset(object):
                         y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
                     elif type_out == 'text':
-                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
+                        if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                            y_aux_type = np.float32
+                        else:
+                            y_aux_type = np.uint8
+                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(y_aux_type)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
-                                np.uint8)
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(y_aux_type)
+                            if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                                y_aux[idx] = ((1. - self.label_smoothing[id_out][set_name]) * y_aux[idx] + (self.label_smoothing[id_out][set_name] / self.vocabulary_len[id_out]))
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
                         y = y_aux
@@ -3733,16 +4037,18 @@ class Dataset(object):
 
         # Recover input samples
         X = []
-        for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
+        for id_in, type_in in list(zip(self.ids_inputs, self.types_inputs)):
             ghost_x = False
             if id_in in self.optional_inputs:
                 try:
-                    x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                    # x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                    x = [getattr(self, 'X_' + set_name)[id_in][index] for index in k]
                 except:
                     x = [[]] * len(k)
                     ghost_x = True
             else:
-                x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                # x = [eval('self.X_' + set_name + '[id_in][index]') for index in k]
+                x = [getattr(self, 'X_' + set_name)[id_in][index] for index in k]
 
             # if(set_name=='val'):
             #    logging.info(x)
@@ -3827,7 +4133,8 @@ class Dataset(object):
         self.__checkSetName(set_name)
         self.__isLoaded(set_name, 1)
 
-        if final > eval('self.len_' + set_name):
+        # if final > eval('self.len_' + set_name):
+        if final > getattr(self, 'len_' + set_name):
             raise Exception('"final" index must be smaller than the number of samples in the set.')
         if init < 0:
             raise Exception('"init" index must be equal or greater than 0.')
@@ -3836,9 +4143,9 @@ class Dataset(object):
 
         # Recover output samples
         Y = []
-        for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
-            y = eval('self.Y_' + set_name + '[id_out][init:final]')
-
+        for id_out, type_out in list(zip(self.ids_outputs, self.types_outputs)):
+            # y = eval('self.Y_' + set_name + '[id_out][init:final]')
+            y = getattr(self, 'Y_' + set_name)[id_out][init:final]
             # Pre-process outputs
             if not debug:
                 if type_out == 'categorical':
@@ -3851,7 +4158,9 @@ class Dataset(object):
                 elif type_out == '3DLabel':
                     nClasses = len(self.classes[id_out])
                     assoc_id_in = self.id_in_3DLabel[id_out]
-                    imlist = eval('self.X_' + set_name + '[assoc_id_in][init:final]')
+                    # imlist = eval('self.X_' + set_name + '[assoc_id_in][init:final]')
+                    imlist = getattr(self, 'Y_' + set_name)[assoc_id_in][init:final]
+
                     y = self.load3DLabels(y, nClasses, dataAugmentation, None,
                                           self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                           imlist)
@@ -3859,7 +4168,8 @@ class Dataset(object):
                     nClasses = len(self.classes[id_out])
                     classes_to_colour = self.semantic_classes[id_out]
                     assoc_id_in = self.id_in_3DLabel[id_out]
-                    imlist = eval('self.X_' + set_name + '[assoc_id_in][init:final]')
+                    # imlist = eval('self.X_' + set_name + '[assoc_id_in][init:final]')
+                    imlist = getattr(self, 'Y_' + set_name)[assoc_id_in][init:final]
                     y = self.load3DSemanticLabels(y, nClasses, classes_to_colour, dataAugmentation, None,
                                                   self.img_size[assoc_id_in], self.img_size_crop[assoc_id_in],
                                                   imlist)
@@ -3874,10 +4184,15 @@ class Dataset(object):
                         y = to_categorical(y, self.vocabulary_len[id_out]).astype(np.uint8)
                     # Use words separately (generator model)
                     elif type_out == 'text':
-                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(np.uint8)
+                        if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                            y_aux_type = np.float32
+                        else:
+                            y_aux_type = np.uint8
+                        y_aux = np.zeros(list(y[0].shape) + [self.vocabulary_len[id_out]]).astype(y_aux_type)
                         for idx in range(y[0].shape[0]):
-                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(
-                                np.uint8)
+                            y_aux[idx] = to_categorical(y[0][idx], self.vocabulary_len[id_out]).astype(np.uint8)
+                            if hasattr(self, 'label_smoothing') and self.label_smoothing[id_out][set_name] > 0.:
+                                y_aux[idx] = ((1. - self.label_smoothing[id_out][set_name]) * y_aux[idx] + (self.label_smoothing[id_out][set_name] / self.vocabulary_len[id_out]))
                         if self.sample_weights[id_out][set_name]:
                             y_aux = (y_aux, y[1])  # join data and mask
 
@@ -3913,12 +4228,12 @@ class Dataset(object):
 
         str_ += '\n'
         str_ += '[ INPUTS ]\n'
-        for id_in, type_in in zip(self.ids_inputs, self.types_inputs):
+        for id_in, type_in in list(zip(self.ids_inputs, self.types_inputs)):
             str_ += type_in + ': ' + id_in + '\n'
 
         str_ += '\n'
         str_ += '[ OUTPUTS ]\n'
-        for id_out, type_out in zip(self.ids_outputs, self.types_outputs):
+        for id_out, type_out in list(zip(self.ids_outputs, self.types_outputs)):
             str_ += type_out + ': ' + id_out + '\n'
 
         str_ += '---------------------------------------------\n'
@@ -3931,7 +4246,8 @@ class Dataset(object):
         :param pos:
         :return:
         """
-        if eval('not self.loaded_' + set_name + '[pos]'):
+        # if eval('not self.loaded_' + set_name + '[pos]'):
+        if not getattr(self, 'loaded_' + set_name)[pos]:
             if pos == 0:
                 raise Exception('Set ' + set_name + ' samples are not loaded yet.')
             elif pos == 1:
@@ -3957,15 +4273,19 @@ class Dataset(object):
         :param set_name:
         :return:
         """
-        if eval('self.loaded_' + set_name + '[0] and self.loaded_' + set_name + '[1]'):
+        # if eval('self.loaded_' + set_name + '[0] and self.loaded_' + set_name + '[1]'):
+        if getattr(self, 'loaded_' + set_name)[0] and getattr(self, 'loaded_' + set_name)[1]:
             lengths = []
             plot_ids_in = []
             for id_in in self.ids_inputs:
                 if id_in not in self.optional_inputs:
                     plot_ids_in.append(id_in)
-                    exec ('lengths.append(len(self.X_' + set_name + '[id_in]))')
+                    # exec ('lengths.append(len(self.X_' + set_name + '[id_in]))')
+                    lengths.append(len(getattr(self, 'X_' + set_name)[id_in]))
             for id_out in self.ids_outputs:
-                exec ('lengths.append(len(self.Y_' + set_name + '[id_out]))')
+                # exec ('lengths.append(len(self.Y_' + set_name + '[id_out]))')
+                lengths.append(len(getattr(self, 'Y_' + set_name)[id_out]))
+
             if lengths[1:] != lengths[:-1]:
                 raise Exception('Inputs and outputs size '
                                 '(' + str(lengths) + ') for "' + set_name + '" set do not match.\n'
@@ -3976,19 +4296,23 @@ class Dataset(object):
         """
             Gets the indices to the next K samples we are going to read.
         """
-        #self.__lock_read.acquire()  # LOCK (for avoiding reading the same samples by different threads)
+        # self.__lock_read.acquire()  # LOCK (for avoiding reading the same samples by different threads)
 
-        new_last = eval('self.last_' + set_name + '+k')
-        last = eval('self.last_' + set_name)
-        length = eval('self.len_' + set_name)
+        # new_last = eval('self.last_' + set_name + '+k')
+        # last = eval('self.last_' + set_name)
+        # length = eval('self.len_' + set_name)
+        new_last = getattr(self, 'last_' + set_name) + k
+        last = getattr(self, 'last_' + set_name)
+        length = getattr(self, 'len_' + set_name)
         if new_last > length:
             new_last = new_last - length
             surpassed = True
         else:
             surpassed = False
-        exec ('self.last_' + set_name + '= new_last')
+        # exec ('self.last_' + set_name + '= new_last')
+        setattr(self, 'last_' + set_name, new_last)
 
-        #self.__lock_read.release()  # UNLOCK
+        # self.__lock_read.release()  # UNLOCK
 
         return [new_last, last, surpassed]
 
@@ -3997,12 +4321,12 @@ class Dataset(object):
             Behaviour applied when pickling a Dataset instance.
         """
         obj_dict = self.__dict__.copy()
-        #del obj_dict['_Dataset__lock_read']
+        # del obj_dict['_Dataset__lock_read']
         return obj_dict
 
     def __setstate__(self, dict):
         """
             Behaviour applied when unpickling a Dataset instance.
         """
-        #dict['_Dataset__lock_read'] = threading.Lock()
+        # dict['_Dataset__lock_read'] = threading.Lock()
         self.__dict__ = dict
