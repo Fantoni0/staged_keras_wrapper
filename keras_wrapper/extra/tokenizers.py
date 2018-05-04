@@ -152,9 +152,12 @@ def tokenize_none_char(caption):
 
     def convert_chars(x):
         if x == ' ':
-            return '<s>'
+            return u'<s>'
         else:
-            return x.encode('utf-8')
+            return x#.encode('utf-8')
+
+    if isinstance(caption, str):
+        caption = ' '.join([w.decode('utf-8') for w in caption.split()])
 
     tokenized = re.sub('[\n\t]+', '', caption.strip())
     tokenized = re.sub('&amp;', ' & ', tokenized)
@@ -166,7 +169,7 @@ def tokenize_none_char(caption):
     tokenized = re.sub('&#91;', ' [ ', tokenized)
     tokenized = re.sub('&#93;', ' ] ', tokenized)
     tokenized = re.sub('[  ]+', ' ', tokenized)
-    tokenized = [convert_chars(char) for char in tokenized.decode('utf-8')] #
+    tokenized = [convert_chars(char) for char in tokenized] ##.decode('utf-8')
     tokenized = " ".join(tokenized)
     return tokenized
 
@@ -329,7 +332,7 @@ def detokenize_bpe(caption, separator=u'@@'):
     return detokenized
 
 
-def detokenize_none_char(caption):
+def detokenize_none_char(caption, escape_moses=False):
     """
     Character-level detokenization. Respects all symbols. Joins chars into words. Words are delimited by
     the <s> token. If found an special character is converted to the escaped char.
@@ -352,14 +355,16 @@ def detokenize_none_char(caption):
     #     else:
     #         return x.encode('utf-8')
 
-    detokenized = re.sub(' & ', ' &amp; ', str(caption).strip())
-    detokenized = re.sub(' \| ', ' &#124; ', detokenized)
-    detokenized = re.sub(' > ', ' &gt; ', detokenized)
-    detokenized = re.sub(' < ', ' &lt; ', detokenized)
-    detokenized = re.sub("' ", ' &apos; ', detokenized)
-    detokenized = re.sub('" ', ' &quot; ', detokenized)
-    detokenized = re.sub('\[ ', ' &#91; ', detokenized)
-    detokenized = re.sub('\] ', ' &#93; ', detokenized)
+    detokenized = caption.strip()
+    if escape_moses:
+        detokenized = re.sub(' & ', ' &amp; ', detokenized)
+        detokenized = re.sub(' \| ', ' &#124; ', detokenized)
+        detokenized = re.sub(' > ', ' &gt; ', detokenized)
+        detokenized = re.sub(' < ', ' &lt; ', detokenized)
+        detokenized = re.sub("' ", ' &apos; ', detokenized)
+        detokenized = re.sub('" ', ' &quot; ', detokenized)
+        detokenized = re.sub('\[ ', ' &#91; ', detokenized)
+        detokenized = re.sub('\] ', ' &#93; ', detokenized)
     detokenized = re.sub(' ', '', detokenized)
     detokenized = re.sub('<s>', ' ', detokenized)
     return detokenized

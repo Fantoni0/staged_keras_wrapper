@@ -20,6 +20,7 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
             extra_vars['tokenize_f'] - tokenization function used during model training (used again for validation)
             extra_vars['detokenize_f'] - detokenization function used during model training (used again for validation)
             extra_vars['tokenize_hypotheses'] - Whether tokenize or not the hypotheses during evaluation
+            extra_vars['tokenize_references'] - Whether tokenize or not the references during evaluation
     :param split: split on which we are evaluating
     :return: Dictionary with the coco scores
     """
@@ -31,20 +32,37 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
     from pycocoevalcap.ter.ter import Ter
 
     gts = extra_vars[split]['references']
-    if extra_vars.get('tokenize_hypotheses', False):
-        hypo = {idx: list(map(extra_vars['tokenize_f'], [lines.strip()])) for (idx, lines) in list(enumerate(pred_list))}
-    else:
-        hypo = {idx: [lines.strip()] for (idx, lines) in list(enumerate(pred_list))}
+    refs = gts
+    hypo = {idx: [lines.strip()] for (idx, lines) in list(enumerate(pred_list))}
+    print("Ground Truths")
+    print(gts)
+    print(hypo)
+    # A la puta
+    # if extra_vars.get('tokenize_hypotheses', False):
+    #     hypo = {idx: list(map(extra_vars['tokenize_f'], [lines.strip()])) for (idx, lines) in list(enumerate(pred_list))}
+    # else:
+    #     hypo = {idx: [lines.strip()] for (idx, lines) in list(enumerate(pred_list))}
+    #
+    # # Tokenize refereces if needed
+    # print(extra_vars.get('tokenize_references'))
+    # if extra_vars.get('tokenize_references', False):
+    #     print("TOKENIZO")
+    #     refs = {idx: list(map(extra_vars['tokenize_f'], gts[idx])) for idx in list(gts)}
+    # else:
+    #     print("NO TOKENIZO")
+    #     refs = gts
 
-    # Tokenize refereces if needed
-    if extra_vars.get('tokenize_references', False):
-        refs = {idx: list(map(extra_vars['tokenize_f'], gts[idx])) for idx in list(gts)}
-    else:
-        refs = gts
-
-    # Detokenize references if needed.    
+    print("PRE")
+    print(refs)
+    #print(hypo)
+    # Detokenize references and hypotheses if needed.
     if extra_vars.get('apply_detokenization', False):
-        refs = {idx: list(map(extra_vars['detokenize_f'], refs[idx])) for idx in refs}
+        #refs = {idx: list(map(extra_vars['detokenize_f'], refs[idx])) for idx in refs}
+        hypo = {idx: [extra_vars['detokenize_f'](' '.join(line))] for idx, line in hypo.iteritems()}
+
+    print("POST")
+    print(refs)
+    #print(hypo)
 
     scorers = [
         (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
@@ -56,6 +74,8 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
         scorers.append((Meteor(language=extra_vars['language']), "METEOR"))
 
     final_scores = {}
+    print("PRE-EVALUATION")
+    print("REFS, HYPO =======> ", (refs, hypo))
     for scorer, method in scorers:
         score, _ = scorer.compute_score(refs, hypo)
         if type(score) == list:

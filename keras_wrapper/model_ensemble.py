@@ -344,15 +344,15 @@ class BeamSearchEnsemble:
                     previous_outputs = {}  # variable for storing previous outputs if using a temporally-linked model
                     for input_id in self.ids_temporally_linked_inputs:
                         previous_outputs[input_id] = dict()
-                        previous_outputs[input_id][-1] = [ds.extra_words['<null>']]#[ds.vocabulary['prev_sentence']['words2idx']['.']]
+                        previous_outputs[input_id][-1] = [self.dataset.extra_words['<null>']]#[ds.vocabulary['prev_sentence']['words2idx']['.']]
 
                 # Calculate how many interations are we going to perform
                 self.matchings_sample_to_next_sample = self.models[0].matchings_sample_to_next_sample
                 if params['n_samples'] < 1:
                     if params.get('max_eval_samples', None) is not None:
-                        n_samples = min(eval("ds.len_" + s), params['max_eval_samples'])
+                        n_samples = min(eval("self.dataset.len_" + s), params['max_eval_samples'])
                     else:
-                        n_samples = eval("ds.len_" + s)
+                        n_samples = eval("self.dataset.len_" + s)
                     num_iterations = int(math.ceil(float(n_samples)))  # / params['batch_size']))
                     # Prepare data generator: We won't use an Homogeneous_Data_Batch_Generator here
                     # TODO: We prepare data as model 0... Different data preparators for each model?
@@ -408,57 +408,56 @@ class BeamSearchEnsemble:
                         X[input_id] = data[0][input_id]
                         s_dict[input_id] = X[input_id]
                     sources_sampling.append(s_dict)
-
-                        Y = dict()
-                        for output_id in params['model_outputs']:
-                            Y[output_id] = data[1][output_id]
-                    else:
-                        s_dict = {}
-                        for input_id in params['model_inputs']:
-                            X[input_id] = data[input_id]
-                            if params['pos_unk']:
-                                s_dict[input_id] = X[input_id]
+                    Y = dict()
+                    for output_id in params['model_outputs']:
+                        Y[output_id] = data[1][output_id]
+                else:
+                    s_dict = {}
+                    for input_id in params['model_inputs']:
+                        X[input_id] = data[input_id]
                         if params['pos_unk']:
-                            sources.append(s_dict)
-                    for i in range(len(X[params['model_inputs'][0]])):
-                        sampled += 1
+                            s_dict[input_id] = X[input_id]
+                    if params['pos_unk']:
+                        sources.append(s_dict)
+                for i in range(len(X[params['model_inputs'][0]])):
+                    sampled += 1
+                    sys.stdout.write('\r')
+                    sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
+                    if not hasattr(self, '_dynamic_display') or self._dynamic_display:
                         sys.stdout.write('\r')
-                        sys.stdout.write("Sampling %d/%d  -  ETA: %ds " % (sampled, n_samples, int(eta)))
-                        if not hasattr(self, '_dynamic_display') or self._dynamic_display:
-                            sys.stdout.write('\r')
+                    else:
+                        sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    x = dict()
+                    for input_id in params['model_inputs']:
+                        if params['temporally_linked'] and input_id in self.ids_temporally_linked_inputs:
+                            link = int(X[params['link_index_id']][i])
+                            if link not in previous_outputs[input_id].keys():  # input to current sample was not processed yet
+                                link = -1
+                            prev_x = [self.dataset.vocabulary[input_id]['idx2words'].get(w, '<unk>') for w in
+                                      previous_outputs[input_id][link]]
+                            x[input_id] = self.dataset.loadText([' '.join(prev_x)],
+                                                      self.dataset.vocabulary[input_id],
+                                                      self.dataset.max_text_len[input_id][s],
+                                                      self.dataset.text_offset[input_id],
+                                                      fill=self.dataset.fill_text[input_id],
+                                                      pad_on_batch=self.dataset.pad_on_batch[input_id],
+                                                      words_so_far=self.dataset.words_so_far[input_id],
+                                                      loading_X=True)[0]
                         else:
-                            sys.stdout.write('\n')
-                        sys.stdout.flush()
-                        x = dict()
-                        for input_id in params['model_inputs']:
-                            if params['temporally_linked'] and input_id in self.ids_temporally_linked_inputs:
-                                link = int(X[params['link_index_id']][i])
-                                if link not in previous_outputs[input_id].keys():  # input to current sample was not processed yet
-                                    link = -1
-                                prev_x = [ds.vocabulary[input_id]['idx2words'].get(w, '<unk>') for w in
-                                          previous_outputs[input_id][link]]
-                                x[input_id] = ds.loadText([' '.join(prev_x)],
-                                                          ds.vocabulary[input_id],
-                                                          ds.max_text_len[input_id][s],
-                                                          ds.text_offset[input_id],
-                                                          fill=ds.fill_text[input_id],
-                                                          pad_on_batch=ds.pad_on_batch[input_id],
-                                                          words_so_far=ds.words_so_far[input_id],
-                                                          loading_X=True)[0]
-                            else:
-                                x[input_id] = np.asarray([X[input_id][i]])
-                        samples, scores, alphas = self.beam_search(x,
-                                                                   params,
-                                                                   eos_sym=ds.extra_words['<pad>'],
-                                                                   null_sym=ds.extra_words['<null>'])
-                        if params['length_penalty'] or params['coverage_penalty']:
-                            if params['length_penalty']:
-                                length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
-                                                     / (5 + 1) ** params['length_norm_factor'])
-                                                    # this 5 is a magic number by Google...
-                                                    for sample in samples]
-                            else:
-                                length_penalties = [1.0 for _ in samples]
+                            x[input_id] = np.asarray([X[input_id][i]])
+                    samples, scores, alphas = self.beam_search(x,
+                                                               params,
+                                                               eos_sym=self.dataset.extra_words['<pad>'],
+                                                               null_sym=self.dataset.extra_words['<null>'])
+                    if params['length_penalty'] or params['coverage_penalty']:
+                        if params['length_penalty']:
+                            length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
+                                                 / (5 + 1) ** params['length_norm_factor'])
+                                                # this 5 is a magic number by Google...
+                                                for sample in samples]
+                        else:
+                            length_penalties = [1.0 for _ in samples]
 
                         if params['coverage_penalty']:
                             coverage_penalties = []
@@ -477,57 +476,57 @@ class BeamSearchEnsemble:
                             coverage_penalties = [0.0 for _ in samples]
                         scores = [co / lp + cp for co, lp, cp in zip(scores, length_penalties, coverage_penalties)]
 
-                        elif params['normalize_probs']:
-                            counts = [len(sample) ** params['alpha_factor'] for sample in samples]
-                            scores = [co / cn for co, cn in zip(scores, counts)]
+                    elif params['normalize_probs']:
+                        counts = [len(sample) ** params['alpha_factor'] for sample in samples]
+                        scores = [co / cn for co, cn in zip(scores, counts)]
 
 
-                        if self.n_best:
-                            n_best_indices = np.argsort(scores)
-                            n_best_scores = np.asarray(scores)[n_best_indices]
-                            n_best_samples = np.asarray(samples)[n_best_indices]
-                            if alphas is not None:
-                                n_best_alphas = [np.stack(alphas[i]) for i in n_best_indices]
-                            else:
-                                n_best_alphas = [None] * len(n_best_indices)
-                            n_best_list.append([n_best_samples, n_best_scores, n_best_alphas])
+                    if self.n_best:
+                        n_best_indices = np.argsort(scores)
+                        n_best_scores = np.asarray(scores)[n_best_indices]
+                        n_best_samples = np.asarray(samples)[n_best_indices]
+                        if alphas is not None:
+                            n_best_alphas = [np.stack(alphas[i]) for i in n_best_indices]
+                        else:
+                            n_best_alphas = [None] * len(n_best_indices)
+                        n_best_list.append([n_best_samples, n_best_scores, n_best_alphas])
 
-                        best_score = np.argmin(scores)
-                        best_sample = samples[best_score]
-                        best_samples.append(best_sample)
-                        if params['pos_unk']:
-                            best_alphas.append(np.asarray(alphas[best_score]))
-                        total_cost += scores[best_score]
-                        eta = (n_samples - sampled) * (time.time() - start_time) / sampled
-                        if params['n_samples'] > 0:
-                            for output_id in params['model_outputs']:
-                                references.append(Y[output_id][i])
-
-                        # store outputs for temporally-linked models
-                        if params['temporally_linked']:
-                            first_idx = max(0, data_gen_instance.first_idx)
-                            # TODO: Make it more general
-                            for (output_id, input_id) in self.matchings_sample_to_next_sample.iteritems():
-                                # Get all words previous to the padding
-                                previous_outputs[input_id][first_idx + sampled - 1] = best_sample[:sum(
-                                    [int(elem > 0) for elem in best_sample])]
-
-                sys.stdout.write('Total cost of the translations: %f \t '
-                                 'Average cost of the translations: %f\n' % (total_cost, total_cost / n_samples))
-                sys.stdout.write('The sampling took: %f secs (Speed: %f sec/sample)\n' %
-                                 ((time.time() - start_time), (time.time() - start_time) / n_samples))
-
-                sys.stdout.flush()
-                if self.n_best:
+                    best_score = np.argmin(scores)
+                    best_sample = samples[best_score]
+                    best_samples.append(best_sample)
                     if params['pos_unk']:
-                        predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources), n_best_list
-                    else:
-                        predictions[s] = np.asarray(best_samples), n_best_list
+                        best_alphas.append(np.asarray(alphas[best_score]))
+                    total_cost += scores[best_score]
+                    eta = (n_samples - sampled) * (time.time() - start_time) / sampled
+                    if params['n_samples'] > 0:
+                        for output_id in params['model_outputs']:
+                            references.append(Y[output_id][i])
+
+                    # store outputs for temporally-linked models
+                    if params['temporally_linked']:
+                        first_idx = max(0, data_gen_instance.first_idx)
+                        # TODO: Make it more general
+                        for (output_id, input_id) in self.matchings_sample_to_next_sample.iteritems():
+                            # Get all words previous to the padding
+                            previous_outputs[input_id][first_idx + sampled - 1] = best_sample[:sum(
+                                [int(elem > 0) for elem in best_sample])]
+
+            sys.stdout.write('Total cost of the translations: %f \t '
+                             'Average cost of the translations: %f\n' % (total_cost, total_cost / n_samples))
+            sys.stdout.write('The sampling took: %f secs (Speed: %f sec/sample)\n' %
+                             ((time.time() - start_time), (time.time() - start_time) / n_samples))
+
+            sys.stdout.flush()
+            if self.n_best:
+                if params['pos_unk']:
+                    predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources), n_best_list
                 else:
-                    if params['pos_unk']:
-                        predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources)
-                    else:
-                        predictions[s] = np.asarray(best_samples)
+                    predictions[s] = np.asarray(best_samples), n_best_list
+            else:
+                if params['pos_unk']:
+                    predictions[s] = (np.asarray(best_samples), np.asarray(best_alphas), sources)
+                else:
+                    predictions[s] = np.asarray(best_samples)
 
         if params['n_samples'] < 1:
             return predictions
