@@ -339,6 +339,7 @@ class EvalPerformance(KerasCallback):
             else:
                 gt_positions = self.gt_pos
 
+
             # Select each output to evaluate separately
             for gt_pos, type, these_metrics, gt_id, write_type, index2word_y, index2word_x in zip(gt_positions,
                                                                                                   self.output_types,
@@ -347,7 +348,7 @@ class EvalPerformance(KerasCallback):
                                                                                                   self.write_type,
                                                                                                   self.index2word_y,
                                                                                                   self.index2word_x):
-                
+
                 predictions = predictions_all[gt_pos]
 
                 if self.verbose > 0:
@@ -395,6 +396,7 @@ class EvalPerformance(KerasCallback):
                                                          index2word_y,
                                                          self.sampling_type,
                                                          verbose=self.verbose)
+
 
                     # Apply detokenization function if needed
                     if self.extra_vars.get('apply_detokenization', False):
