@@ -593,8 +593,11 @@ class Model_Wrapper(object):
 
         # compile differently depending if our model is 'Sequential', 'Model' or 'Graph'
         if isinstance(self.model, Sequential) or isinstance(self.model, Model):
-            self.model.compile(optimizer=optimizer, metrics=metrics, loss=loss, loss_weights=loss_weights,
+            if loss_weights:
+                self.model.compile(optimizer=optimizer, metrics=metrics, loss=loss, loss_weights=loss_weights,
                                sample_weight_mode=sample_weight_mode)
+            else:
+                self.model.compile(optimizer=optimizer, metrics=metrics, loss=loss, sample_weight_mode=sample_weight_mode)
         else:
             raise NotImplementedError()
 

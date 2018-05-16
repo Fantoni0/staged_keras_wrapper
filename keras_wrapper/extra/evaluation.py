@@ -33,11 +33,15 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
 
     gts = extra_vars[split]['references']
 
+    #print("Gts = ", list(gts.values())[:10])
+    #print("Pred_list = ", pred_list[:10])
+
     tok_hypo = extra_vars.get('tokenize_hypotheses', False)
+    #print("TOK_HYPO: ", tok_hypo)
     if isinstance(tok_hypo, list) and tok_hypo[0]:
         hypo = {idx: list(map(extra_vars['tokenize_f'], [lines.strip()])) for (idx, lines) in
                     list(enumerate(pred_list))}
-    elif tok_hypo:
+    elif tok_hypo and not isinstance(tok_hypo, list):
         hypo = {idx: list(map(extra_vars['tokenize_f'], [lines.strip()])) for (idx, lines) in
                 list(enumerate(pred_list))}
     else:
@@ -48,13 +52,16 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
     #     hypo = {idx: [lines.strip()] for (idx, lines) in list(enumerate(pred_list))}
     #
 
+
     tok_ref = extra_vars.get('tokenize_references', False)
+    #print("TOK_REF: ", tok_ref)
     if isinstance(tok_ref, list) and tok_ref[0]:
         refs = {idx: list(map(extra_vars['tokenize_f'], gts[idx])) for idx in list(gts)}
-    elif tok_ref:
+    elif tok_ref and not isinstance(tok_ref, list):
         refs = {idx: list(map(extra_vars['tokenize_f'], gts[idx])) for idx in list(gts)}
     else:
         refs = gts
+
     # # Tokenize refereces if needed
     # print(extra_vars.get('tokenize_references'))
     # if extra_vars.get('tokenize_references', False):
@@ -69,6 +76,9 @@ def get_coco_score(pred_list, verbose, extra_vars, split):
     if extra_vars.get('apply_detokenization_ref', False):
         refs = {idx: list(map(extra_vars['detokenize_f'], refs[idx])) for idx in refs}
         #hypo = {idx: [extra_vars['detokenize_f'](' '.join(line))] for idx, line in hypo.iteritems()}
+
+    print("Hypotheses = ", list(hypo.values())[:5])
+    print("References = ", list(refs    .values())[:5])
 
     scorers = [
         (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
