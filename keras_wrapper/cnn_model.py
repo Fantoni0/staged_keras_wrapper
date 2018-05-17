@@ -1336,12 +1336,12 @@ class Model_Wrapper(object):
         See Dataset class for more information
         :param debug:
         :param X: Input context
-        :param states_below: Batch of partial hypotheses
+        :param states_below: List of batchs of partial hypotheses
         :param params: Decoding parameters
         :param ii: Decoding time-step
-        :param prev_out: output from the previous timestep, which will be reused by self.model_next
+        :param prev_out: List of outputs from the previous timestep, which will be reused by self.model_next
         (only applicable if beam search specific models self.model_init and self.model_next models are defined)
-        :return: Network predictions at time-step ii
+        :return: List of Network predictions at time-step ii
         """
         in_data = {}
         n_samples = states_below.shape[0]
@@ -1447,6 +1447,7 @@ class Model_Wrapper(object):
         else:
             all_data = {output_ids_list[params['feedback_decoder']]: np.array(out_data)[:, pick_idx, :]}
         probs = all_data[output_ids_list[params['feedback_decoder']]]
+
         ##########################################
         # Define returned data
         ##########################################

@@ -49,9 +49,10 @@ class BeamSearchEnsemble:
         :return: Combined outputs from the ensemble
         """
 
-        probs_list = []
-        prev_outs_list = []
-        alphas_list = []
+        n_outs = len(params['model_outputs'])  # number of model outputs
+        probs_list = []  # [[] for _ in range(n_outs)]
+        prev_outs_list = []  # [[] for _ in range(n_outs)]
+        alphas_list = []  # [[] for _ in range(n_outs)]
         for i, model in list(enumerate(models)):
             if self.optimized_search:
                 [model_probs, next_outs] = model.predict_cond_optimized(X, states_below, params,
@@ -107,17 +108,18 @@ class BeamSearchEnsemble:
         :param null_sym: <null> symbol
         :return: UNSORTED list of [k_best_samples, k_best_scores] (k: beam size)
         """
+        n_outs = len(params['model_outputs'])  # number of model outputs
         k = params['beam_size']
-        samples = []
-        sample_scores = []
+        samples = [[] for _ in range(n_outs)]
+        sample_scores = [[] for _ in range(n_outs)]
         pad_on_batch = params['pad_on_batch']
-        dead_k = 0  # samples that reached eos
-        live_k = 1  # samples that did not yet reached eos
-        hyp_samples = [[]] * live_k
-        hyp_scores = np.zeros(live_k).astype('float32')
+        dead_k = [0 for _ in range(n_outs)]  # samples that reached eos
+        live_k = [1 for _ in range(n_outs)]  # samples that did not yet reached eos
+        hyp_samples = [[[]] * live_k for _ in range(n_outs)]
+        hyp_scores = [np.zeros(live_k).astype('float32') for _ in range(n_outs)]
         if self.return_alphas:
-            sample_alphas = []
-            hyp_alphas = [[]] * live_k
+            sample_alphas = [[] for _ in range(n_outs)]
+            hyp_alphas = [[[]] * live_k for _ in range(n_outs)]
         if pad_on_batch:
             maxlen = int(len(X[params['dataset_inputs'][0]][0]) * params['output_max_length_depending_on_x_factor']) if \
                 params['output_max_length_depending_on_x'] else params['maxlen']
@@ -133,18 +135,18 @@ class BeamSearchEnsemble:
             maxlen = int(np.argmax(X[params['dataset_inputs'][0]][0] == eos_sym) * params[
                 'output_max_length_depending_on_x_factor']) if \
                 params['output_max_length_depending_on_x'] else params['maxlen']
-            maxlen = min(params['state_below_maxlen'] - 1, maxlen)
+            maxlenparams = min(params['state_below_maxlen'] - 1, maxlen)
 
         # we must include an additional dimension if the input for each timestep are all the generated "words_so_far"
         if params['words_so_far']:
             if k > maxlen:
                 raise NotImplementedError("BEAM_SIZE can't be higher than MAX_OUTPUT_TEXT_LEN!")
-            state_below = np.asarray([[null_sym]] * live_k) \
-                if pad_on_batch else np.asarray([np.zeros((maxlen, maxlen))] * live_k)
+            state_below = [np.asarray([[null_sym]] * live_k[i]) for i in range(n_outs)] \
+                if pad_on_batch else [np.asarray([np.zeros((maxlen, maxlen))] * live_k[i]) for i in range(n_outs)]
         else:
-            state_below = np.asarray([null_sym] * live_k) if pad_on_batch else \
-                np.asarray([np.zeros(params['state_below_maxlen']) + null_sym] * live_k)
-        prev_outs = [None] * len(self.models)
+            state_below = [np.asarray([null_sym] * live_k[i]) for i in range(n_outs)] if pad_on_batch else \
+                [np.asarray([np.zeros(params['state_below_maxlen']) + null_sym] * live_k[i] for i in range(n_outs))]
+        prev_outs = [[None for _ in range(n_outs)]] * len(self.models)
         for ii in range(maxlen):
             # for every possible live sample calc prob for every possible label
             if self.optimized_search:  # use optimized search model if available
