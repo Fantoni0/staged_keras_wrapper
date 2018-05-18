@@ -1345,6 +1345,7 @@ class Model_Wrapper(object):
         """
         in_data = {}
         n_samples = states_below.shape[0]
+        n_outs = len(params['model_oututs'])  # Number of outputs
 
         ##########################################
         # Choose model to use for sampling
@@ -1359,29 +1360,34 @@ class Model_Wrapper(object):
         if ii > 1:  # timestep > 1 (model_next to model_next)
             for idx, next_out_name in list(enumerate(self.ids_outputs_next)):
                 if idx == 0:
-                    if params.get('attend_on_output', False):
-                        if params.get('pad_on_batch', True):
-                            pass
-                            # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
-                    else:
-                        if params.get('pad_on_batch', True):
-                            states_below = states_below[:, -1].reshape(n_samples, -1)
-                    in_data[self.ids_inputs_next[0]] = states_below
+                    for jj in range(n_outs):
+                        if params.get('attend_on_output', False):
+                            if params.get('pad_on_batch', True):
+                                pass
+                                # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
+                        else:
+                            if params.get('pad_on_batch', True):
+                                sb = states_below[jj][:, -1].reshape(n_samples, -1)
+                            else:
+                                sb = states_below[jj]
+                        in_data[self.ids_inputs_next[jj]] = sb
                 if idx > 0:  # first output must be the output probs.
                     if next_out_name in list(self.matchings_next_to_next):
                         next_in_name = self.matchings_next_to_next[next_out_name]
-                        if prev_out[idx].shape[0] == 1:
-                            prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
-                        in_data[next_in_name] = prev_out[idx]
+                        for jj in range(n_outs):
+                            if prev_out[jj][idx].shape[0] == 1:
+                                prev_out[jj][idx] = np.repeat(prev_out[jj][idx], n_samples, axis=0)
+                            in_data[next_in_name] = prev_out[jj][idx]
         elif ii == 0:  # first timestep
             for model_input in params['model_inputs']:  # [:-1]:
                 if X[model_input].shape[0] == 1:
                     in_data[model_input] = np.repeat(X[model_input], n_samples, axis=0)
                 else:
                     in_data[model_input] = copy.copy(X[model_input])
+            for jj in range(n_outs):
                 if params.get('pad_on_batch', True):
-                    states_below = states_below.reshape(n_samples, -1)
-            in_data[params['model_inputs'][params['state_below_index']]] = states_below
+                    sb = states_below[jj].reshape(n_samples, -1)
+                in_data[params['model_inputs'][params['state_below_index']+jj]] = sb
 
         elif ii == 1:  # timestep == 1 (model_init to model_next)
             for idx, init_out_name in list(enumerate(self.ids_outputs_init)):
@@ -1391,16 +1397,18 @@ class Model_Wrapper(object):
                             pass
                             # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
                     else:
-                        if params.get('pad_on_batch', True):
-                            states_below = states_below[:, -1].reshape(n_samples, -1)
-                    in_data[self.ids_inputs_next[0]] = states_below
+                        for jj in range(n_outs):
+                            if params.get('pad_on_batch', True):
+                                sb = states_below[jj][:, -1].reshape(n_samples, -1)
+                            in_data[self.ids_inputs_next[jj]] = sb
 
                 if idx > 0:  # first output must be the output probs.
                     if init_out_name in list(self.matchings_init_to_next):
                         next_in_name = self.matchings_init_to_next[init_out_name]
-                        if prev_out[idx].shape[0] == 1:
-                            prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
-                        in_data[next_in_name] = prev_out[idx]
+                        for jj in range(n_outs):
+                            if prev_out[jj][idx].shape[0] == 1:
+                                prev_out[jj][idx] = np.repeat(prev_out[jj][idx], n_samples, axis=0)
+                            in_data[next_in_name] = prev_out[jj][idx]
 
         ##########################################
         # Recover output identifiers
@@ -1426,7 +1434,7 @@ class Model_Wrapper(object):
                     max_pos = min([i + params['beam_batch_size'], n_samples, len(v)])
                     aux_in_data[k] = v[i:max_pos]
                     # aux_in_data[k] = np.expand_dims(v[i], axis=0)
-                predicted_out = model.predict_on_batch(aux_in_data)
+                predicted_out = model.predict_on_batch(aux_in_data) #######
                 if i == 0:
                     out_data = predicted_out
                 else:
@@ -1443,10 +1451,11 @@ class Model_Wrapper(object):
             all_data = {}
             for output_id in range(len(output_ids_list)):
                 all_data[output_ids_list[output_id]] = out_data[output_id]
-            all_data[output_ids_list[params['feedback_decoder']]] = np.array(all_data[output_ids_list[params['feedback_decoder']]])[:, pick_idx, :]
+            for jj in range(n_outs):
+                all_data[output_ids_list[params['feedback_decoder']+jj]] = np.array(all_data[output_ids_list[params['feedback_decoder']+jj]])[:, pick_idx, :]
         else:
             all_data = {output_ids_list[params['feedback_decoder']]: np.array(out_data)[:, pick_idx, :]}
-        probs = all_data[output_ids_list[params['feedback_decoder']]]
+        probs = [all_data[output_ids_list[params['feedback_decoder']+jj]] for jj in range(n_outs)]
 
         ##########################################
         # Define returned data
