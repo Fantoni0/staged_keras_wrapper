@@ -203,17 +203,17 @@ class BeamSearchEnsemble:
                 for idx in range(len(new_hyp_samples)):
                     if new_hyp_samples[idx][-1] == eos_sym:  # finished sample
                         samples.append(new_hyp_samples[idx])
-                        sample_scores.append(new_hyp_scores[idx])
+                        sample_scores[jj].append(new_hyp_scores[idx])
                         if self.return_alphas:
                             sample_alphas[jj].append(new_hyp_alphas[idx])
                         dead_k += 1
                     else:
                         indices_alive.append(new_trans_indices[idx])
                         new_live_k += 1
-                        hyp_samples.append(new_hyp_samples[idx])
+                        hyp_samples[jj].append(new_hyp_samples[idx])
                         hyp_scores[jj].append(new_hyp_scores[idx])
                         if self.return_alphas:
-                            hyp_alphas.append(new_hyp_alphas[idx])
+                            hyp_alphas[jj].append(new_hyp_alphas[idx])
                 hyp_scores[jj] = np.array(hyp_scores[jj])
                 live_k[jj] = new_live_k
 
@@ -246,14 +246,14 @@ class BeamSearchEnsemble:
                         for idx_vars in range(len(prev_outs[jj][n_model])):
                             prev_outs[jj][n_model][idx_vars] = prev_outs[jj][n_model][idx_vars][indices_alive]
 
-        # dump every remaining one ##ACABAR DE IMPLEMENTAR
+        # dump every remaining one
         for jj in range(n_outs):
             if live_k[jj] > 0:
                 for idx in range(live_k[jj]):
-                    samples[jj].append(hyp_samples[idx])
-                    sample_scores.append(hyp_scores[idx])
+                    samples[jj].append(hyp_samples[jj][idx])
+                    sample_scores[jj].append(hyp_scores[jj][idx])
                     if self.return_alphas:
-                        sample_alphas.append(hyp_alphas[idx])
+                        sample_alphas[jj].append(hyp_alphas[jj][idx])
         if self.return_alphas:
             return samples, sample_scores, sample_alphas
         else:

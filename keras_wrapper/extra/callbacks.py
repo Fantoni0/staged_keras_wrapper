@@ -481,6 +481,7 @@ class EvalPerformance(KerasCallback):
                                      "applying random image shuffling.")
 
                     # Evaluate on the chosen metric
+                    print(self.extra_vars)
                     metrics = evaluation.select[metric](
                         pred_list=predictions,
                         verbose=self.verbose,
@@ -698,56 +699,58 @@ class Sample(KerasCallback):
                                                              pad_sequences=True,
                                                              verbose=self.verbose)
             if s in predictions:
-                if params_prediction['pos_unk']:
-                    samples = predictions[s][0]
-                    alphas = predictions[s][1]
-                    heuristic = self.extra_vars['heuristic']
-                else:
-                    samples = predictions[s]
-                    alphas = None
-                    heuristic = None
-
-                predictions = predictions[s]
-                if self.is_text:
-                    if self.out_pred_idx is not None:
-                        samples = samples[self.out_pred_idx]
-                    # Convert predictions into sentences
-                    if self.beam_search:
-                        predictions = decode_predictions_beam_search(samples,
-                                                                     self.index2word_y,
-                                                                     alphas=alphas,
-                                                                     x_text=sources,
-                                                                     heuristic=heuristic,
-                                                                     mapping=self.extra_vars.get('mapping', None),
-                                                                     verbose=self.verbose)
+                for jj in range(len(predictions)):
+                    if params_prediction['pos_unk']:
+                        samples = predictions[s][jj][0]
+                        alphas = predictions[s][jj][1]
+                        heuristic = self.extra_vars['heuristic']
                     else:
-                        predictions = decode_predictions(samples,
-                                                         1,
-                                                         self.index2word_y,
-                                                         self.sampling_type,
-                                                         verbose=self.verbose)
-                    truths = decode_predictions_one_hot(truths, self.index2word_y, verbose=self.verbose)
+                        samples = predictions[s][jj]
+                        alphas = None
+                        heuristic = None
 
-                    # Apply detokenization function if needed
-                    if self.extra_vars.get('apply_detokenization', False):
-                        if self.print_sources:
-                            sources = map(self.extra_vars['detokenize_f'], sources)
-                        predictions = map(self.extra_vars['detokenize_f'], predictions)
-                        truths = map(self.extra_vars['detokenize_f'], truths)
+                    predictionsjj = predictions[s][jj]
+                    if self.is_text:
+                        if self.out_pred_idx is not None:
+                            samples = samples[self.out_pred_idx]
+                        # Convert predictions into sentences
+                        if self.beam_search:
+                            predictionsjj = decode_predictions_beam_search(samples,
+                                                                         self.index2word_y[jj],
+                                                                         alphas=alphas,
+                                                                         x_text=sources,
+                                                                         heuristic=heuristic,
+                                                                         mapping=self.extra_vars.get('mapping', None),
+                                                                         verbose=self.verbose)
+                        else:
+                            predictionsjj = decode_predictions(samples,
+                                                             1,
+                                                             self.index2word_y[jj],
+                                                             self.sampling_type,
+                                                             verbose=self.verbose)
+                        truths[jj] = decode_predictions_one_hot(truths[jj], self.index2word_y[jj], verbose=self.verbose)
 
-                # Write samples
-                if self.print_sources:
+                        # Apply detokenization function if needed
+                        if self.extra_vars.get('apply_detokenization', False):
+                            if self.print_sources:
+                                sources = map(self.extra_vars['detokenize_f'], sources)
+                            predictionsjj = map(self.extra_vars['detokenize_f'], predictionsjj)
+                            truths[jj] = map(self.extra_vars['detokenize_f'], truths[jj])
+
                     # Write samples
-                    for i, (source, sample, truth) in list(enumerate(zip(sources, predictions, truths))):
-                        print("Source     (%d): %s" % (i, str(source.encode('utf-8'))))
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
-                        print("")
-                else:
-                    for i, (sample, truth) in list(enumerate(zip(predictions, truths))):
-                        print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
-                        print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
-                        print("")
+                    print("Output %d/%d - MultiOutput model." % (jj, len(predictions)))
+                    if self.print_sources:
+                        # Write samples
+                        for i, (source, sample, truth) in list(enumerate(zip(sources, predictionsjj, truths))):
+                            print("Source     (%d): %s" % (i, str(source.encode('utf-8'))))
+                            print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
+                            print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                            print("")
+                    else:
+                        for i, (sample, truth) in list(enumerate(zip(predictionsjj, truths))):
+                            print("Hypothesis (%d): %s" % (i, str(sample.encode('utf-8'))))
+                            print("Reference  (%d): %s" % (i, str(truth.encode('utf-8'))))
+                            print("")
 
 
 SampleEachNUpdates = Sample

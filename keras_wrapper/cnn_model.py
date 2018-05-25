@@ -1344,8 +1344,8 @@ class Model_Wrapper(object):
         :return: List of Network predictions at time-step ii
         """
         in_data = {}
-        n_samples = states_below.shape[0]
-        n_outs = len(params['model_oututs'])  # Number of outputs
+        n_samples = states_below[0].shape[0]
+        n_outs = len(params['model_outputs'])  # Number of outputs
 
         ##########################################
         # Choose model to use for sampling
@@ -1359,36 +1359,48 @@ class Model_Wrapper(object):
         ##########################################
         if ii > 1:  # timestep > 1 (model_next to model_next)
             for idx, next_out_name in list(enumerate(self.ids_outputs_next)):
+                print("idx, next_name= ", idx,next_out_name)
                 if idx == 0:
                     for jj in range(n_outs):
+                        n_samples = states_below[jj].shape[0]
                         if params.get('attend_on_output', False):
                             if params.get('pad_on_batch', True):
                                 pass
-                                # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
+                                sb = states_below[jj][:, :ii + 1].reshape(n_samples, -1)
                         else:
                             if params.get('pad_on_batch', True):
                                 sb = states_below[jj][:, -1].reshape(n_samples, -1)
                             else:
                                 sb = states_below[jj]
+                        print("STATE?= ", self.ids_inputs_next[jj])
                         in_data[self.ids_inputs_next[jj]] = sb
                 if idx > 0:  # first output must be the output probs.
                     if next_out_name in list(self.matchings_next_to_next):
                         next_in_name = self.matchings_next_to_next[next_out_name]
-                        for jj in range(n_outs):
-                            if prev_out[jj][idx].shape[0] == 1:
-                                prev_out[jj][idx] = np.repeat(prev_out[jj][idx], n_samples, axis=0)
-                            in_data[next_in_name] = prev_out[jj][idx]
+                        print("next_in_name = ", next_in_name )
+                        if prev_out[idx].shape[0] == 1:
+                            if '1' in next_in_name:
+                                n_samples = states_below[1].shape[0]
+                            else:
+                                n_samples = states_below[0].shape[0]
+                            #print("prev_out[idx]= ", len(prev_out[idx]))
+                            prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
+                            #print("prev_out[idx]= ", len(prev_out[idx]))
+                        in_data[next_in_name] = prev_out[idx]
+                        print("indatanex= ", len(in_data[next_in_name]))
+                        #print("prev_outidx= ", prev_out[idx])
         elif ii == 0:  # first timestep
-            for model_input in params['model_inputs']:  # [:-1]:
+            for idx, model_input in enumerate(params['model_inputs']):  # [:-1]:
                 if X[model_input].shape[0] == 1:
+                    n_samples = states_below[max(idx-1, 0)].shape[0]
                     in_data[model_input] = np.repeat(X[model_input], n_samples, axis=0)
                 else:
                     in_data[model_input] = copy.copy(X[model_input])
             for jj in range(n_outs):
                 if params.get('pad_on_batch', True):
+                    n_samples = states_below[jj].shape[0]
                     sb = states_below[jj].reshape(n_samples, -1)
                 in_data[params['model_inputs'][params['state_below_index']+jj]] = sb
-
         elif ii == 1:  # timestep == 1 (model_init to model_next)
             for idx, init_out_name in list(enumerate(self.ids_outputs_init)):
                 if idx == 0:
@@ -1398,6 +1410,7 @@ class Model_Wrapper(object):
                             # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
                     else:
                         for jj in range(n_outs):
+                            n_samples = states_below[jj].shape[0]
                             if params.get('pad_on_batch', True):
                                 sb = states_below[jj][:, -1].reshape(n_samples, -1)
                             in_data[self.ids_inputs_next[jj]] = sb
@@ -1405,11 +1418,13 @@ class Model_Wrapper(object):
                 if idx > 0:  # first output must be the output probs.
                     if init_out_name in list(self.matchings_init_to_next):
                         next_in_name = self.matchings_init_to_next[init_out_name]
-                        for jj in range(n_outs):
-                            if prev_out[jj][idx].shape[0] == 1:
-                                prev_out[jj][idx] = np.repeat(prev_out[jj][idx], n_samples, axis=0)
-                            in_data[next_in_name] = prev_out[jj][idx]
-
+                        if prev_out[idx].shape[0] == 1:
+                            if '1' in init_out_name:
+                                n_samples = states_below[1].shape[0]
+                            else:
+                                n_samples = states_below[0].shape[0]
+                            prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
+                        in_data[next_in_name] = prev_out[idx]
         ##########################################
         # Recover output identifiers
         ##########################################
@@ -1423,6 +1438,9 @@ class Model_Wrapper(object):
         ##########################################
         # Apply prediction on current timestep
         ##########################################
+        print("II= ", ii)
+        for k,v in iteritems(in_data):
+            print("Key, len: ", k, len(v))
         if params['max_batch_size'] >= n_samples:  # The model inputs beam will fit into one batch in memory
             out_data = model.predict_on_batch(in_data)
         else:
@@ -1495,18 +1513,20 @@ class Model_Wrapper(object):
         :param null_sym: <null> symbol
         :return: UNSORTED list of [k_best_samples, k_best_scores] (k: beam size)
         """
+        n_outs = len(params['model_outputs'])  # number of model outputs
         k = params['beam_size']
-        samples = []
-        sample_scores = []
+        samples = [[] for _ in range(n_outs)]
+        sample_scores = [[] for _ in range(n_outs)]
         pad_on_batch = params['pad_on_batch']
-        dead_k = 0  # samples that reached eos
-        live_k = 1  # samples that did not yet reach eos
-        hyp_samples = [[]] * live_k
-        hyp_scores = np.zeros(live_k).astype('float32')
+        dead_k = [0 for _ in range(n_outs)]  # samples that reached eos
+        live_k = [1 for _ in range(n_outs)]  # samples that did not yet reached eos
+        hyp_samples = [[[]] * live_k[j] for j in range(n_outs)]
+        hyp_scores = [np.zeros(live_k[j]).astype('float32') for j in range(n_outs)]
         ret_alphas = return_alphas or params['pos_unk']
+        hyp_alphas = [[[]] * live_k[j] for j in range(n_outs)]
         if ret_alphas:
-            sample_alphas = []
-            hyp_alphas = [[]] * live_k
+            sample_alphas = [[] for _ in range(n_outs)]
+
         if pad_on_batch:
             maxlen = int(len(X[params['dataset_inputs'][0]][0]) * params['output_max_length_depending_on_x_factor']) if \
                 params['output_max_length_depending_on_x'] else params['maxlen']
@@ -1528,110 +1548,139 @@ class Model_Wrapper(object):
             if k > maxlen:
                 raise NotImplementedError(
                     "BEAM_SIZE can't be higher than MAX_OUTPUT_TEXT_LEN on the current implementation.")
-            state_below = np.asarray([[null_sym]] * live_k) if pad_on_batch else np.asarray(
-                [np.zeros((maxlen, maxlen))] * live_k)
+            state_below = [np.asarray([[null_sym]] * live_k[i]) for i in range(n_outs)] if pad_on_batch else [np.asarray(
+                [np.zeros((maxlen, maxlen))] * live_k[i]) for i in range(n_outs)]
         else:
-            state_below = np.asarray([null_sym] * live_k) if pad_on_batch else \
-                np.asarray([np.zeros(params['state_below_maxlen']) + null_sym] * live_k)
-        prev_out = None
+            state_below = [np.asarray([null_sym] * live_k[i]) for i in range(n_outs)] if pad_on_batch else \
+                [np.asarray([np.zeros(params['state_below_maxlen']) + null_sym] * live_k[i]) for i in range(n_outs)]
+        prev_out = [None for _ in range(n_outs)]
 
+        indices_alive = [[] for _ in range(n_outs)]
         for ii in range(maxlen):
             # for every possible live sample calc prob for every possible label
             if params['optimized_search']:  # use optimized search model if available
                 [probs, prev_out] = self.predict_cond_optimized(X, state_below, params, ii, prev_out)
                 if ret_alphas:
-                    alphas = prev_out[-1][0]  # Shape: (k, n_steps)
-                    prev_out = prev_out[:-1]
+                    alphas = [prev_out[-(n_outs-j)][0] for j in range(n_outs)]  # Shape: (k, n_steps)
+                    prev_out = prev_out[:-n_outs]
             else:
                 probs = self.predict_cond(X, state_below, params, ii)
-            log_probs = np.log(probs)
-            if minlen > 0 and ii < minlen:
-                log_probs[:, eos_sym] = -np.inf
-            # total score for every sample is sum of -log of word prb
-            cand_scores = np.array(hyp_scores)[:, None] - log_probs
-            cand_flat = cand_scores.flatten()
-            # Find the best options by calling argsort of flatten array
-            ranks_flat = cand_flat.argsort()[:(k - dead_k)]
-            # Decypher flatten indices
-            voc_size = log_probs.shape[1]
-            trans_indices = ranks_flat // voc_size  # index of row
-            word_indices = ranks_flat % voc_size  # index of col
-            costs = cand_flat[ranks_flat]
-            best_cost = costs[0]
-            # Form a beam for the next iteration
-            new_hyp_samples = []
-            new_trans_indices = []
-            new_hyp_scores = np.zeros(k - dead_k).astype('float32')
-            if ret_alphas:
-                new_hyp_alphas = []
-            for idx, [ti, wi] in list(enumerate(zip(trans_indices, word_indices))):
-                if params['search_pruning']:
-                    if costs[idx] < k * best_cost:
-                        new_hyp_samples.append(hyp_samples[ti] + [wi])
+            for jj in range(n_outs):
+                probsjj = probs[jj]
+                log_probs = np.log(probsjj)
+                if minlen > 0 and ii < minlen:
+                    log_probs[:, eos_sym] = -np.inf
+                # total score for every sample is sum of -log of word prb
+                cand_scores = np.array(hyp_scores[jj])[:, None] - log_probs
+                cand_flat = cand_scores.flatten()
+                # Find the best options by calling argsort of flatten array
+                ranks_flat = cand_flat.argsort()[:(k - dead_k[jj])]
+                # Decypher flatten indices
+                voc_size = log_probs.shape[1]
+                trans_indices = ranks_flat // voc_size  # index of row
+                word_indices = ranks_flat % voc_size  # index of col
+                costs = cand_flat[ranks_flat]
+                best_cost = costs[0]
+                # Form a beam for the next iteration
+                new_hyp_samples = []
+                new_trans_indices = []
+                new_hyp_scores = np.zeros(k - dead_k[jj]).astype('float32')
+                if ret_alphas:
+                    new_hyp_alphas = []
+                for idx, [ti, wi] in list(enumerate(zip(trans_indices, word_indices))):
+                    if params['search_pruning']:
+                        if costs[idx] < k * best_cost:
+                            new_hyp_samples.append(hyp_samples[jj][ti] + [wi])
+                            new_trans_indices.append(ti)
+                            new_hyp_scores[idx] = copy.copy(costs[idx])
+                            if ret_alphas:
+                                new_hyp_alphas.append(hyp_alphas[jj][ti] + [alphas[ti]])
+                        else:
+                            dead_k[jj] += 1
+                    else:
+                        new_hyp_samples.append(hyp_samples[jj][ti] + [wi])
                         new_trans_indices.append(ti)
                         new_hyp_scores[idx] = copy.copy(costs[idx])
                         if ret_alphas:
-                            new_hyp_alphas.append(hyp_alphas[ti] + [alphas[ti]])
+                            new_hyp_alphas.append(hyp_alphas[jj][ti] + [alphas[ti]])
+                # check the finished samples
+                new_live_k = 0
+                hyp_samples[jj] = []
+                hyp_scores[jj] = []
+                hyp_alphas[jj] = []
+                indices_alive[jj] = []
+                for idx in range(len(new_hyp_samples)):
+                    if new_hyp_samples[idx][-1] == eos_sym:  # finished sample
+                        samples[jj].append(new_hyp_samples[idx])
+                        sample_scores[jj].append(new_hyp_scores[idx])
+                        if ret_alphas:
+                            sample_alphas[jj].append(new_hyp_alphas[idx])
+                        dead_k[jj] += 1
                     else:
-                        dead_k += 1
-                else:
-                    new_hyp_samples.append(hyp_samples[ti] + [wi])
-                    new_trans_indices.append(ti)
-                    new_hyp_scores[idx] = copy.copy(costs[idx])
-                    if ret_alphas:
-                        new_hyp_alphas.append(hyp_alphas[ti] + [alphas[ti]])
-            # check the finished samples
-            new_live_k = 0
-            hyp_samples = []
-            hyp_scores = []
-            hyp_alphas = []
-            indices_alive = []
-            for idx in range(len(new_hyp_samples)):
-                if new_hyp_samples[idx][-1] == eos_sym:  # finished sample
-                    samples.append(new_hyp_samples[idx])
-                    sample_scores.append(new_hyp_scores[idx])
-                    if ret_alphas:
-                        sample_alphas.append(new_hyp_alphas[idx])
-                    dead_k += 1
-                else:
-                    indices_alive.append(new_trans_indices[idx])
-                    new_live_k += 1
-                    hyp_samples.append(new_hyp_samples[idx])
-                    hyp_scores.append(new_hyp_scores[idx])
-                    if ret_alphas:
-                        hyp_alphas.append(new_hyp_alphas[idx])
-            hyp_scores = np.array(hyp_scores)
-            live_k = new_live_k
+                        indices_alive[jj].append(new_trans_indices[idx])
+                        new_live_k += 1
+                        hyp_samples[jj].append(new_hyp_samples[idx])
+                        hyp_scores[jj].append(new_hyp_scores[idx])
+                        if ret_alphas:
+                            hyp_alphas[jj].append(new_hyp_alphas[idx])
+                hyp_scores[jj] = np.array(hyp_scores[jj])
+                live_k[jj] = new_live_k
 
-            if new_live_k < 1:
-                break
-            if dead_k >= k:
-                break
-            state_below = np.asarray(hyp_samples, dtype='int64')
+                if new_live_k < 1:
+                    break
+                if dead_k[jj] >= k:
+                    break
+                state_below[jj] = np.asarray(hyp_samples[jj], dtype='int64')
 
-            state_below = np.hstack((np.zeros((state_below.shape[0], 1), dtype='int64') + null_sym, state_below)) \
-                if pad_on_batch else \
-                np.hstack((np.zeros((state_below.shape[0], 1), dtype='int64') + null_sym,
-                           state_below,
-                           np.zeros((state_below.shape[0],
-                                     max(params['state_below_maxlen'] - state_below.shape[1] - 1, 0)), dtype='int64')))
+                state_below[jj] = np.hstack((np.zeros((state_below[jj].shape[0], 1), dtype='int64') + null_sym, state_below[jj])) \
+                    if pad_on_batch else \
+                    np.hstack((np.zeros((state_below[jj].shape[0], 1), dtype='int64') + null_sym,
+                               state_below[jj],
+                               np.zeros((state_below[jj].shape[0],
+                                         max(params['state_below_maxlen'] - state_below[jj].shape[1] - 1, 0)), dtype='int64')))
 
-            # we must include an additional dimension if the input for each timestep are all the generated words so far
-            if params['words_so_far']:
-                state_below = np.expand_dims(state_below, axis=0)
+                # we must include an additional dimension if the input for each timestep are all the generated words so far
+                if params['words_so_far']:
+                    state_below[jj] = np.expand_dims(state_below[jj], axis=0)
 
-            if params['optimized_search'] and ii > 0:
-                # filter next search inputs w.r.t. remaining samples
-                for idx_vars in range(len(prev_out)):
-                    prev_out[idx_vars] = prev_out[idx_vars][indices_alive]
+                if params['optimized_search'] and ii > 0:
+                    # filter next search inputs w.r.t. remaining samples
+                    print(indices_alive[jj])
+                    for idx_vars in range(len(prev_out)):
+                        print(idx_vars)
+                        prev_out[idx_vars] = prev_out[idx_vars][indices_alive[jj]]
+
+
+            print("INSERTING")
+            for i in range(len(prev_out)):
+                print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
+            # Insert fake data to maintain batch consistency
+            max_l = max(len(p) for p in prev_out)
+            print("MAX_L= ", max_l)
+            prev_out = [prev_out[p] if len(prev_out[p]) == max_l else prev_out[p]+[prev_out[p][-1]*(max_l-len(prev_out[p]))] for
+                        p in range(len(prev_out))]
+            #print(prev_out)
+            #max_l = max(len(p) for p in state_below)
+            if ii > 0:
+                print("PRE_STATE_BELOW= ", state_below)
+                print(state_below[0][-1])
+                print(state_below[1][-1])
+                state_below = [state_below[p] if len(state_below[p]) == max_l else np.concatenate(state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]) for p in range(len(state_below))]
+            #else state_below[p]+state_below[p][-1]*(max_l-len(state_below[p])) for
+            #               p in range(len(state_below))]
+            print(state_below)
+            print("POST")
+            for i in range(len(prev_out)):
+                print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
 
         # dump every remaining one
-        if live_k > 0:
-            for idx in range(live_k):
-                samples.append(hyp_samples[idx])
-                sample_scores.append(hyp_scores[idx])
-                if ret_alphas:
-                    sample_alphas.append(hyp_alphas[idx])
+        for jj in range(n_outs):
+            if live_k[jj] > 0:
+                for idx in range(live_k[jj]):
+                    samples[jj].append(hyp_samples[jj][idx])
+                    sample_scores[jj].append(hyp_scores[jj][idx])
+                    if ret_alphas:
+                        sample_alphas[jj].append(hyp_alphas[jj][idx])
         if ret_alphas:
             return samples, sample_scores, np.asarray(sample_alphas)
         else:
@@ -2023,6 +2072,8 @@ class Model_Wrapper(object):
                     "The following attributes must be inserted to the model when building a temporally_linked model:\n",
                     "- matchings_sample_to_next_sample\n",
                     "- ids_temporally_linked_inputs\n")
+
+        n_outs = len(params['model_outputs']) # For Multioutput models
         predictions = dict()
         references = []
         sources_sampling = []
@@ -2105,11 +2156,11 @@ class Model_Wrapper(object):
                     data_gen = data_gen_instance.generator()
 
                 if params['n_samples'] > 0:
-                    references = []
+                    references = [] * n_outs
                     sources_sampling = []
-                best_samples = []
+                best_samples = [] * n_outs
                 if params['pos_unk']:
-                    best_alphas = []
+                    best_alphas = [] * n_outs
                     sources = []
 
                 total_cost = 0
@@ -2175,44 +2226,45 @@ class Model_Wrapper(object):
 
                         if params['length_penalty'] or params['coverage_penalty']:
                             if params['length_penalty']:
-                                length_penalties = [((5 + len(sample)) ** params['length_norm_factor']
+                                length_penalties = [[((5 + len(sample)) ** params['length_norm_factor']
                                                      / (5 + 1) ** params['length_norm_factor'])
                                                     # this 5 is a magic number by Google...
-                                                    for sample in samples]
+                                                    for sample in samples[j]] for j in range(n_outs)]
                             else:
-                                length_penalties = [1.0 for _ in samples]
+                                length_penalties = [[1.0 for _ in samples[j]] for j in range(n_outs)]
 
                             if params['coverage_penalty']:
-                                coverage_penalties = []
-                                for k, sample in list(enumerate(samples)):
-                                    # We assume that source sentences are at the first position of x
-                                    x_sentence = x[params['model_inputs'][0]][0]
-                                    alpha = np.asarray(alphas[k])
-                                    cp_penalty = 0.0
-                                    for cp_i in range(len(x_sentence)):
-                                        att_weight = 0.0
-                                        for cp_j in range(len(sample)):
-                                            att_weight += alpha[cp_j, cp_i]
-                                        cp_penalty += np.log(min(att_weight, 1.0))
-                                    coverage_penalties.append(params['coverage_norm_factor'] * cp_penalty)
+                                coverage_penalties = [] * n_outs
+                                for jj in range(n_outs):
+                                    for k, sample in list(enumerate(samples[jj])):
+                                        # We assume that source sentences are at the first position of x
+                                        x_sentence = x[params['model_inputs'][jj]][0]
+                                        alpha = np.asarray(alphas[jj][k])
+                                        cp_penalty = 0.0
+                                        for cp_i in range(len(x_sentence)):
+                                            att_weight = 0.0
+                                            for cp_j in range(len(sample)):
+                                                att_weight += alpha[cp_j, cp_i]
+                                            cp_penalty += np.log(min(att_weight, 1.0))
+                                        coverage_penalties.append(params['coverage_norm_factor'] * cp_penalty)
                             else:
-                                coverage_penalties = [0.0 for _ in samples]
-                            scores = [co / lp + cp for co, lp, cp in zip(scores, length_penalties, coverage_penalties)]
+                                coverage_penalties = [[0.0 for _ in samples[j]] for j in range(n_outs)]
+                            scores = [[co / lp + cp for co, lp, cp in zip(scores[j], length_penalties[j], coverage_penalties[j])] for j in range(n_outs)]
 
                         elif params['normalize_probs']:
-                            counts = [len(sample) ** params['alpha_factor'] for sample in samples]
-                            scores = [co / cn for co, cn in zip(scores, counts)]
+                            counts = [[len(sample) ** params['alpha_factor'] for sample in samples[j]] for j in range(n_outs)]
+                            scores = [[co / cn for co, cn in zip(scores[j], counts[j])] for j in range(n_outs)]
 
-                        best_score = np.argmin(scores)
-                        best_sample = samples[best_score]
-                        best_samples.append(best_sample)
+                        best_score = [np.argmin(scores[j]) for j in range(n_outs)]
+                        best_sample = [samples[best_score[j]] for j in range(n_outs)]
+                        [best_samples.append(best_sample[j]) for j in range(n_outs)]
                         if params['pos_unk']:
-                            best_alphas.append(np.asarray(alphas[best_score]))
-                        total_cost += scores[best_score]
+                            [best_alphas.append(np.asarray(alphas[best_score[j]])) for j in range(n_outs)]
+                        total_cost += sum([scores[j][best_score[j]] for j in range(n_outs)])
                         eta = (n_samples - sampled) * (time.time() - start_time) / sampled
                         if params['n_samples'] > 0:
-                            for output_id in params['model_outputs']:
-                                references.append(Y[output_id][i])
+                            for jj, output_id in zip(n_outs, params['model_outputs']):
+                                references[jj].append(Y[output_id][i])
 
                         # store outputs for temporally-linked models
                         if params['temporally_linked']:
@@ -2234,9 +2286,9 @@ class Model_Wrapper(object):
                     if eval('ds.loaded_raw_' + s + '[0]'):
                         sources = file2list(eval('ds.X_raw_' + s + '["raw_' + params['model_inputs'][0] + '"]'),
                                             stripfile=False)
-                    predictions[s] = (np.asarray(best_samples), best_alphas, sources)
+                    predictions[s] = [(np.asarray(best_samples[j]), best_alphas[j], sources) for j in range(n_outs)]
                 else:
-                    predictions[s] = np.asarray(best_samples)
+                    predictions[s] = [np.asarray(best_samples[j]) for j in range(n_outs)]
         del data_gen
         del data_gen_instance
         if params['n_samples'] < 1:
