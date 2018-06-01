@@ -1571,6 +1571,8 @@ class Model_Wrapper(object):
                 if minlen > 0 and ii < minlen:
                     log_probs[:, eos_sym] = -np.inf
                 # total score for every sample is sum of -log of word prb
+                # print("Shape HYP_SCORES= ", np.array(hyp_scores[jj])[:, None])
+                # print("Shape LOG_PROBS= ", log_probs)
                 cand_scores = np.array(hyp_scores[jj])[:, None] - log_probs
                 cand_flat = cand_scores.flatten()
                 # Find the best options by calling argsort of flatten array
@@ -1646,6 +1648,7 @@ class Model_Wrapper(object):
                 if params['optimized_search'] and ii > 0:
                     # filter next search inputs w.r.t. remaining samples
                     print(indices_alive[jj])
+                    print("Len prev_outs == ", len(prev_out))
                     for idx_vars in range(len(prev_out)):
                         print(idx_vars)
                         prev_out[idx_vars] = prev_out[idx_vars][indices_alive[jj]]
@@ -1655,20 +1658,35 @@ class Model_Wrapper(object):
             for i in range(len(prev_out)):
                 print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
             # Insert fake data to maintain batch consistency
-            max_l = max(len(p) for p in prev_out)
+            max_l = max(len(p) for p in prev_out+state_below)
             print("MAX_L= ", max_l)
+            print(prev_out[0][-1])
             prev_out = [prev_out[p] if len(prev_out[p]) == max_l else prev_out[p]+[prev_out[p][-1]*(max_l-len(prev_out[p]))] for
                         p in range(len(prev_out))]
             #print(prev_out)
             #max_l = max(len(p) for p in state_below)
             if ii > 0:
-                print("PRE_STATE_BELOW= ", state_below)
-                print(state_below[0][-1])
-                print(state_below[1][-1])
-                state_below = [state_below[p] if len(state_below[p]) == max_l else np.concatenate(state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]) for p in range(len(state_below))]
+                # print("PRE_STATE_BELOW= ", state_below)
+                # print(state_below[0][-1])
+                # print(state_below[1][-1])
+                # print(len(state_below))
+                #state_below = [state_below[p] if len(state_below[p]) == max_l else np.concatenate(state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]) for p in range(len(state_below))]
+                for p in range(len(state_below)):
+                    if len(state_below[p]) == max_l:
+                        print("igual")
+                        state_below[p] = state_below[p]
+                    else:
+                        # print("diferente")
+                        # print("P = ", p)
+                        # print(state_below[p][-1])
+                        # print((max_l-len(state_below[p])))
+                        # print([state_below[p][-1]*(max_l-len(state_below[p]))])
+                        # print(np.concatenate((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]), axis=0))
+                        state_below[p] = np.concatenate((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]), axis=0)
+                        print("HECHO")
             #else state_below[p]+state_below[p][-1]*(max_l-len(state_below[p])) for
             #               p in range(len(state_below))]
-            print(state_below)
+            # print(state_below)
             print("POST")
             for i in range(len(prev_out)):
                 print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
