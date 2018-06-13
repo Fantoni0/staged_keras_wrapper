@@ -374,9 +374,6 @@ def semantic_segmentation_meaniou(pred_list, verbose, extra_vars, split):
     gt_list = extra_vars[split]['references']
     discard_classes = extra_vars['discard_classes']
 
-    np.save('/media/HDD_3TB/bea/gt.npy', gt_list)
-    np.save('/media/HDD_3TB/bea/pred.npy', pred_list)
-
     pred_class_list = []
     for sample_score in pred_list:
         pred_class_list += list(np.argmax(sample_score, axis=1))
@@ -421,6 +418,7 @@ def semantic_segmentation_meaniou(pred_list, verbose, extra_vars, split):
 
     mean_iou = np.mean(inter / union)
     acc = np.sum(inter) / np.sum(cm)
+    
     if verbose > 0:
         logging.info('Mean IoU: %f' % mean_iou)
         logging.info('Accuracy: %f' % float(acc))

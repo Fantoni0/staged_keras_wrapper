@@ -3235,7 +3235,7 @@ class Dataset(object):
 
         return data
 
-    def setTrainMean(self, mean_image, id, use_RGB=True, normalization=False):
+    def setTrainMean(self, mean_image, id, normalization=False):
         """
             Loads a pre-calculated training mean image, 'mean_image' can either be:
 
@@ -3244,7 +3244,6 @@ class Dataset(object):
             - string with the path to the stored image.
 
         :param mean_image:
-        :param user_RGB: set to False for grayscale images
         :param normalization:
         :param id: identifier of the type of input whose train mean is being introduced.
         """
@@ -3384,6 +3383,7 @@ class Dataset(object):
                 raise Exception('Training mean is not loaded or calculated yet for the input with id "' + id + '".')
             train_mean = copy.copy(self.train_mean[id])
             train_mean = misc.imresize(train_mean, self.img_size_crop[id][0:2])
+            train_mean = train_mean.astype(np.float64)
 
             # Transpose dimensions
             if len(self.img_size[id]) == 3:  # if it is a 3D image
@@ -3391,8 +3391,8 @@ class Dataset(object):
                 if useBGR:
                     if self.img_size[id][2] == 3:  # if has 3 channels
                         train_mean = train_mean[:, :, ::-1]
-                    if keras.backend.image_data_format() == 'channels_first':
-                        train_mean = train_mean.transpose(2, 0, 1)
+                if keras.backend.image_data_format() == 'channels_first':
+                    train_mean = train_mean.transpose(2, 0, 1)
 
             # Also normalize training mean image if we are applying normalization to images
             if normalization:
@@ -3511,8 +3511,8 @@ class Dataset(object):
                 if useBGR:
                     if self.img_size[id][2] == 3:  # if has 3 channels
                         im = im[:, :, ::-1]
-                    if keras.backend.image_data_format() == 'channels_first':
-                        im = im.transpose(2, 0, 1)
+                if keras.backend.image_data_format() == 'channels_first':
+                    im = im.transpose(2, 0, 1)
             else:
                 pass
 
