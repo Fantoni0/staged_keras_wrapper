@@ -1372,12 +1372,10 @@ class Model_Wrapper(object):
                                 sb = states_below[jj][:, -1].reshape(n_samples, -1)
                             else:
                                 sb = states_below[jj]
-                        print("STATE?= ", self.ids_inputs_next[jj])
                         in_data[self.ids_inputs_next[jj]] = sb
                 if idx > 0:  # first output must be the output probs.
                     if next_out_name in list(self.matchings_next_to_next):
                         next_in_name = self.matchings_next_to_next[next_out_name]
-                        print("next_in_name = ", next_in_name )
                         if prev_out[idx].shape[0] == 1:
                             if '1' in next_in_name:
                                 n_samples = states_below[1].shape[0]
@@ -1387,8 +1385,6 @@ class Model_Wrapper(object):
                             prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
                             #print("prev_out[idx]= ", len(prev_out[idx]))
                         in_data[next_in_name] = prev_out[idx]
-                        print("indatanex= ", len(in_data[next_in_name]))
-                        #print("prev_outidx= ", prev_out[idx])
         elif ii == 0:  # first timestep
             for idx, model_input in enumerate(params['model_inputs']):  # [:-1]:
                 if X[model_input].shape[0] == 1:
@@ -1571,8 +1567,13 @@ class Model_Wrapper(object):
                 if minlen > 0 and ii < minlen:
                     log_probs[:, eos_sym] = -np.inf
                 # total score for every sample is sum of -log of word prb
-                # print("Shape HYP_SCORES= ", np.array(hyp_scores[jj])[:, None])
-                # print("Shape LOG_PROBS= ", log_probs)
+                # Augment hyp-scores
+                #if ii > 1:
+                #    hyp_scores[jj] = hyp_scores[jj] + [hyp_scores[jj][-1]] * (
+                #            np.shape(log_probs)[0] - len(hyp_scores[jj]))
+                print("LEN_hyp_scores= ", len(hyp_scores[jj]))
+                print("Shape HYP_SCORES= ", np.shape(np.array(hyp_scores[jj])[:, None]))
+                print("Shape LOG_PROBS= ", np.shape(log_probs))
                 cand_scores = np.array(hyp_scores[jj])[:, None] - log_probs
                 cand_flat = cand_scores.flatten()
                 # Find the best options by calling argsort of flatten array
@@ -1581,9 +1582,12 @@ class Model_Wrapper(object):
                 voc_size = log_probs.shape[1]
                 trans_indices = ranks_flat // voc_size  # index of row
                 word_indices = ranks_flat % voc_size  # index of col
+                print("trans_idx, word_idx= ", trans_indices, word_indices)
+                print("L_trans_idx, L_word_idx= ", len(trans_indices), len(word_indices))
                 costs = cand_flat[ranks_flat]
                 best_cost = costs[0]
                 # Form a beam for the next iteration
+
                 new_hyp_samples = []
                 new_trans_indices = []
                 new_hyp_scores = np.zeros(k - dead_k[jj]).astype('float32')
@@ -1650,46 +1654,21 @@ class Model_Wrapper(object):
                     print(indices_alive[jj])
                     print("Len prev_outs == ", len(prev_out))
                     for idx_vars in range(len(prev_out)):
-                        print(idx_vars)
+                        print("index= ", idx_vars)
+                        print("len= ", len(prev_out[idx_vars]))
                         prev_out[idx_vars] = prev_out[idx_vars][indices_alive[jj]]
-
-
-            print("INSERTING")
-            for i in range(len(prev_out)):
-                print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
-            # Insert fake data to maintain batch consistency
-            max_l = max(len(p) for p in prev_out+state_below)
-            print("MAX_L= ", max_l)
-            print(prev_out[0][-1])
-            prev_out = [prev_out[p] if len(prev_out[p]) == max_l else prev_out[p]+[prev_out[p][-1]*(max_l-len(prev_out[p]))] for
-                        p in range(len(prev_out))]
-            #print(prev_out)
-            #max_l = max(len(p) for p in state_below)
             if ii > 0:
-                # print("PRE_STATE_BELOW= ", state_below)
-                # print(state_below[0][-1])
-                # print(state_below[1][-1])
-                # print(len(state_below))
-                #state_below = [state_below[p] if len(state_below[p]) == max_l else np.concatenate(state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]) for p in range(len(state_below))]
+                max_l = max(len(p) for p in prev_out + state_below)
+                for p in range(len(prev_out)):
+                    if not len(prev_out[p]) == max_l:
+                        prev_out[p] = np.vstack((prev_out[p], (max_l - len(prev_out[p])) * [prev_out[p][-1]]))
                 for p in range(len(state_below)):
-                    if len(state_below[p]) == max_l:
-                        print("igual")
-                        state_below[p] = state_below[p]
-                    else:
-                        # print("diferente")
-                        # print("P = ", p)
-                        # print(state_below[p][-1])
-                        # print((max_l-len(state_below[p])))
-                        # print([state_below[p][-1]*(max_l-len(state_below[p]))])
-                        # print(np.concatenate((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]), axis=0))
-                        state_below[p] = np.concatenate((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]), axis=0)
-                        print("HECHO")
-            #else state_below[p]+state_below[p][-1]*(max_l-len(state_below[p])) for
-            #               p in range(len(state_below))]
-            # print(state_below)
-            print("POST")
-            for i in range(len(prev_out)):
-                print("PRE PREV_O i, len(i)= ", i, len(prev_out[i]), len(prev_out[i][0]))
+                    if not len(state_below[p]) == max_l:
+                        state_below[p] = np.vstack((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]))
+                        print("LA BUENA LEN = ", len(np.vstack((state_below[p], [state_below[p][-1]*(max_l-len(state_below[p]))]))))
+                        print("LA BUENA LEN = ",
+                              len([state_below[p][-1] * (max_l - len(state_below[p]))]))
+                        print("HECHO_MAX_LEN-> ", max_l)
 
         # dump every remaining one
         for jj in range(n_outs):
