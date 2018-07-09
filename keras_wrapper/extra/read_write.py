@@ -64,7 +64,7 @@ def clean_dir(directory):
 # Main functions
 ###
 def file2list(filepath, stripfile=True):
-    with codecs.open(filepath, 'r', encoding='utf-8') as f:
+    with codecs.open(filepath, 'r', encoding='utf-8') as f: # , errors='ignore'
         lines = [k for k in [k.strip() for k in f.readlines()] if len(k) > 0] if stripfile else [k for k in
                                                                                                  f.readlines()]
         return lines
