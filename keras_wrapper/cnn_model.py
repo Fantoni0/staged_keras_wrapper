@@ -1370,7 +1370,6 @@ class Model_Wrapper(object):
                     if params.get('attend_on_output', False):
                         if params.get('pad_on_batch', True):
                             pass
-                            # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
                     else:
                         if params.get('pad_on_batch', True):
                             states_below = states_below[:, -1].reshape(n_samples, -1)
@@ -1382,7 +1381,7 @@ class Model_Wrapper(object):
                             prev_out[idx] = np.repeat(prev_out[idx], n_samples, axis=0)
                         in_data[next_in_name] = prev_out[idx]
         elif ii == 0:  # first timestep
-            for model_input in params['model_inputs']:  # [:-1]:
+            for model_input in params['model_inputs']:
                 if X[model_input].shape[0] == 1:
                     in_data[model_input] = np.repeat(X[model_input], n_samples, axis=0)
                 else:
@@ -1397,7 +1396,6 @@ class Model_Wrapper(object):
                     if params.get('attend_on_output', False):
                         if params.get('pad_on_batch', True):
                             pass
-                            # states_below = states_below[:, :ii + 1].reshape(n_samples, -1)
                     else:
                         if params.get('pad_on_batch', True):
                             states_below = states_below[:, -1].reshape(n_samples, -1)
@@ -1414,7 +1412,7 @@ class Model_Wrapper(object):
         # Recover output identifiers
         ##########################################
         # in any case, the first output of the models must be the next words' probabilities
-        pick_idx = 0
+        pick_idx = ii if params.get('attend_on_output', False) else 0
         if ii == 0:  # optimized search model (model_init case)
             output_ids_list = self.ids_outputs_init
         else:  # optimized search model (model_next case)
