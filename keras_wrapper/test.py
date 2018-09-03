@@ -19,7 +19,7 @@ def test_models_allclose(model, model_init=None, model_next=None, rtol=1e-05, at
         model_next = model.model_next
         model = model.model
     logging.info("Checking all models are close")
-    model_names = map(lambda x: str(x), model.weights)
+    model_names = map(str, model.weights)
     if model_init is None and model_next is None:
         logging.warning("Checking of models_allclose won't be performed, because model_init and model_next are None")
         return True
@@ -28,27 +28,22 @@ def test_models_allclose(model, model_init=None, model_next=None, rtol=1e-05, at
         print ("Checking model next weights")
 
     if model_next is not None:
-        model_next_names = map(lambda x: str(x), model_next.weights)
+        model_next_names = map(str, model_next.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model_names.index(name)
-            assert np.allclose(model.weights[index_model].get_value(), model_next.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model index: ' + str(index_model) + ' model_next index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model.weights[index_model].get_value(), model_next.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model index: ' + str(index_model) + ' model_next index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
     if verbose > 0:
-        print ("===========================")
         print ("Checking model init weights")
 
     if model_init is not None:
-        model_init_names = map(lambda x: str(x), model_init.weights)
+        model_init_names = map(str, model_init.weights)
         for (index_init, name) in list(enumerate(model_init_names)):
             index_model = model_names.index(name)
-            assert np.allclose(model.weights[index_model].get_value(), model_init.weights[index_init].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model index: ' + str(index_model) + ' model_init index ' + \
-                str(index_init) + ')'
+            if not np.allclose(model.weights[index_model].get_value(), model_init.weights[index_init].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model index: ' + str(index_model) + ' model_init index ' + str(index_init) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_init, "at model_init - position", index_model, "at model are close")
     return True
@@ -80,8 +75,8 @@ def test_2models_allclose(model1, model2, rtol=1e-05, atol=1e-08, verbose=0):
     else:
         logging.info("Not close!")
 
-    model1_names = map(lambda x: str(x), model1.weights)
-    model2_names = map(lambda x: str(x), model2.weights)
+    model1_names = map(str, model1.weights)
+    model2_names = map(str, model2.weights)
 
     if verbose > 0:
         print ("===========================")
@@ -89,78 +84,64 @@ def test_2models_allclose(model1, model2, rtol=1e-05, atol=1e-08, verbose=0):
 
     logging.info("Checking model_next 1 is close to model_next 2")
     if model1 is not None:
-        model_next_names = map(lambda x: str(x), model1.weights)
+        model_next_names = map(str, model1.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model2_names.index(name)
-            assert np.allclose(model2.weights[index_model].get_value(), model1.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1 index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model2.weights[index_model].get_value(), model1.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1 index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
     if model2 is not None:
-        model_next_names = map(lambda x: str(x), model2.weights)
+        model_next_names = map(str, model2.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model1_names.index(name)
-            assert np.allclose(model1.weights[index_model].get_value(), model2.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2 index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model1.weights[index_model].get_value(), model2.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2 index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
     if verbose > 0:
-        print ("===========================")
         print ("Checking model next weights")
 
     logging.info("Checking model_next 1 is close to model_next 2")
     if model1_next is not None:
-        model_next_names = map(lambda x: str(x), model1_next.weights)
+        model_next_names = map(str, model1_next.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model2_names.index(name)
-            assert np.allclose(model2.weights[index_model].get_value(), model1_next.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1_next index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model2.weights[index_model].get_value(), model1_next.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise ('Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1_next index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
     if model2_next is not None:
-        model_next_names = map(lambda x: str(x), model2_next.weights)
+        model_next_names = map(str, model2_next.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model1_names.index(name)
-            assert np.allclose(model1.weights[index_model].get_value(), model2_next.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2_next index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model1.weights[index_model].get_value(), model2_next.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2_next index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
     if verbose > 0:
-        print ("===========================")
         print ("Checking model init weights")
 
     logging.info("Checking model_next 1 is close to model_next 2")
     if model1_init is not None:
-        model_next_names = map(lambda x: str(x), model1_init.weights)
+        model_next_names = map(str, model1_init.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model2_names.index(name)
-            assert np.allclose(model2.weights[index_model].get_value(), model1_init.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1_init index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model2.weights[index_model].get_value(), model1_init.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model2 index: ' + str(index_model) + ' model1_init index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
     if model2_init is not None:
-        model_next_names = map(lambda x: str(x), model2_init.weights)
+        model_next_names = map(str, model2_init.weights)
         for (index_next, name) in list(enumerate(model_next_names)):
             index_model = model1_names.index(name)
-            assert np.allclose(model1.weights[index_model].get_value(), model2_init.weights[index_next].get_value(),
-                               rtol=rtol, atol=atol), \
-                'Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2_next index ' + \
-                str(index_next) + ')'
+            if not np.allclose(model1.weights[index_model].get_value(), model2_init.weights[index_next].get_value(), rtol=rtol, atol=atol):
+                raise AssertionError('Parameters ' + name + ' are not close! (model1 index: ' + str(index_model) + ' model2_next index ' + str(index_next) + ')')
             if verbose > 0:
                 print ("Weights", name, "(position ", index_next, "at model_next - position", index_model, "at model are close")
 
@@ -233,11 +214,10 @@ def classifyFood101():
     net.setOptimizer(lr=0.001, metrics=['accuracy'])
 
     # Apply short training (1 epoch)
-    training_params = {'n_epochs': 1, 'batch_size': 50,
-                       'lr_decay': 2, 'lr_gamma': 0.8,
-                       'epochs_for_save': 1, 'verbose': 1, 'eval_on_sets': ['val']}
+    # training_params = {'n_epochs': 1, 'batch_size': 50,
+    #                    'lr_decay': 2, 'lr_gamma': 0.8,
+    #                    'epochs_for_save': 1, 'verbose': 1, 'eval_on_sets': ['val']}
     # net.trainNet(ds, training_params)
-
 
     # Test network on test set
     test_params = {'batch_size': 50}
@@ -246,7 +226,7 @@ def classifyFood101():
     # Predict network on all sets
     test_params['predict_on_sets'] = ['val']
     predictions = net.predictNet(ds, test_params)
-
+    logging.info("Predicted %d samples." % (len(predictions)))
     logging.info("Done")
 
 
@@ -268,7 +248,7 @@ def loadFlickr8k():
     max_text_len = 35
 
     # Let's load the train, val and test splits of the descriptions (outputs)
-    #    the files include a description per line 
+    #    the files include a description per line
     #    and a set of 5 consecutive descriptions correspond to a single input image
 
     ds.setOutput(base_path + 'text/train_descriptions.txt', 'train',
@@ -282,18 +262,15 @@ def loadFlickr8k():
                  tokenization='tokenize_basic', max_text_len=max_text_len)
 
     # Let's load the associated images (inputs)
-    #    we must take into account that in this dataset we have 5 sentences per image, 
+    #    we must take into account that in this dataset we have 5 sentences per image,
     #    for this reason we introduce the parameter 'repeat_set'=5
 
-    ds.setInput(base_path + 'text/Flickr_8k.trainImages.txt', 'train',
-                type='image', id='images', repeat_set=5)
-    ds.setInput(base_path + 'text/Flickr_8k.devImages.txt', 'val',
-                type='image', id='images', repeat_set=5)
-    ds.setInput(base_path + 'text/Flickr_8k.testImages.txt', 'test',
-                type='image', id='images', repeat_set=5)
+    ds.setInput(base_path + 'text/Flickr_8k.trainImages.txt', 'train', type='image', id='images', repeat_set=5)
+    ds.setInput(base_path + 'text/Flickr_8k.devImages.txt', 'val', type='image', id='images', repeat_set=5)
+    ds.setInput(base_path + 'text/Flickr_8k.testImages.txt', 'test', type='image', id='images', repeat_set=5)
 
     # Now let's set the dataset mean image for preprocessing the data
-    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], id='images')
+    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], data_id='images')
 
     # We have finished loading the dataset, now we can store it for using it in the future
     saveDataset(ds, 'Datasets')
@@ -303,7 +280,7 @@ def loadFlickr8k():
 
     # Lets recover the first batch of data
     [X, Y] = ds.getXY('train', 10)
-    logging.info('Sample data loaded correctly.')
+    logging.info('Sample data loaded correctly. %d input samples. %d output samples' %(len(X), len(Y)))
 
 
 def loadMSVD():
@@ -332,7 +309,7 @@ def loadMSVD():
                  tokenization='tokenize_basic', max_text_len=max_text_len)
 
     # Let's load the associated videos (inputs)
-    #    we must take into account that in this dataset we have a different number of sentences per video, 
+    #    we must take into account that in this dataset we have a different number of sentences per video,
     #    for this reason we introduce the parameter 'repeat_set'=num_captions, where num_captions is a list
     #    containing the number of captions in each video.
 
@@ -351,7 +328,7 @@ def loadMSVD():
                 repeat_set=num_captions_test)
 
     # Now let's set the dataset mean image for preprocessing the data
-    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], id='videos')
+    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], data_id='videos')
 
     # We have finished loading the dataset, now we can store it for using it in the future
     saveDataset(ds, 'Datasets')
@@ -362,6 +339,7 @@ def loadMSVD():
     # Lets recover the first batch of data
     [X, Y] = ds.getXY('train', 10)
     logging.info('Sample data loaded correctly.')
+
 
 def loadFood101():
     logging.info('Loading Food101 dataset')
@@ -392,7 +370,7 @@ def loadFood101():
     ds.setClasses(base_path + 'meta/classes.txt', 'labels')
 
     # Now let's set the dataset mean image for preprocessing the data
-    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], id='images')
+    ds.setTrainMean(mean_image=[122.6795, 116.6690, 104.0067], data_id='images')
 
     # We have finished loading the dataset, now we can store it for using it in the future
     saveDataset(ds, 'Datasets')
