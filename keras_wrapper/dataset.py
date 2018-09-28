@@ -314,7 +314,8 @@ class Data_Batch_Generator(object):
                  shuffle=True,
                  temporally_linked=False,
                  init_sample=-1,
-                 final_sample=-1):
+                 final_sample=-1,
+                 sep=0):
         """
         Initializes the Data_Batch_Generator
         :param set_split: Split (train, val, test) to retrieve data
@@ -329,6 +330,7 @@ class Data_Batch_Generator(object):
         :param random_samples: Retrieves this number of training samples
         :param shuffle: Shuffle the training dataset
         :param temporally_linked: Indicates if we are using a temporally-linked model
+        :param sep: When using cache. Disables shuffling and establich the separation between sentences in the same batch
         """
         if da_enhance_list is None:
             da_enhance_list = []
@@ -341,6 +343,7 @@ class Data_Batch_Generator(object):
         self.init_sample = init_sample
         self.final_sample = final_sample
         self.next_idx = None
+        self.sep = sep
 
         # Several parameters
         self.params = {'batch_size': batch_size,
@@ -379,15 +382,24 @@ class Data_Batch_Generator(object):
             it += 1
 
             # Checks if we are finishing processing the data split
-            init_sample = (it - 1) * self.params['batch_size']
-            final_sample = it * self.params['batch_size']
             batch_size = self.params['batch_size']
+            if self.sep == 0:
+                init_sample = (it - 1) * batch_size
+                final_sample = it * batch_size
+            else:
+                init_sample = ((it -1) % self.sep) + (batch_size * self.sep * ((it - 1)/self.sep))
+                final_sample = self.sep * (batch_size * ((it - 1) / self.sep +1))
+
             # n_samples_split = eval("self.dataset.len_" + self.set_split)
             n_samples_split = getattr(self.dataset, "len_" + self.set_split)
             if final_sample >= n_samples_split:
                 final_sample = n_samples_split
-                batch_size = final_sample - init_sample
-                it = 0
+                if self.sep == 0:
+                    batch_size = final_sample - init_sample
+                    it = 0
+                if init_sample > n_samples_split:  # When using self.sep
+                    it = 0
+                    continue
 
             # Recovers a batch of data
             if self.params['random_samples'] > 0:
@@ -399,7 +411,7 @@ class Data_Batch_Generator(object):
                     indices = list(range(self.next_idx, self.next_idx + num_retrieve))
                     self.next_idx += num_retrieve
                 else:
-                    indices = np.random.randint(0, n_samples_split, num_retrieve)
+                    indices = np.arange(it)
                 self.params['random_samples'] -= num_retrieve
 
                 # At sampling from train/val, we always have Y
@@ -430,14 +442,17 @@ class Data_Batch_Generator(object):
                     data = self.net.prepareData(X_batch, Y_batch)
 
             elif self.init_sample > -1 and self.final_sample > -1:
-                indices = list(range(self.init_sample, self.final_sample))
+                if self.sep == 0:
+                    indices = list(range(self.init_sample, self.final_sample))
+                else:
+                    indices = range(init_sample, final_sample, self.sep)
                 if self.predict:
                     X_batch = self.dataset.getX_FromIndices(self.set_split,
                                                             indices,
                                                             normalization=self.params['normalization'],
                                                             normalization_type=self.params['normalization_type'],
                                                             meanSubstraction=self.params['mean_substraction'],
-                                                            dataAugmentation=data_augmentatio,
+                                                            dataAugmentation=data_augmentation,
                                                             wo_da_patch_type=self.params['wo_da_patch_type'],
                                                             da_patch_type=self.params['da_patch_type'],
                                                             da_enhance_list=self.params['da_enhance_list'])
@@ -458,27 +473,55 @@ class Data_Batch_Generator(object):
 
             else:
                 if self.predict:
-                    X_batch = self.dataset.getX(self.set_split,
-                                                init_sample,
-                                                final_sample,
-                                                normalization=self.params['normalization'],
-                                                normalization_type=self.params['normalization_type'],
-                                                meanSubstraction=self.params['mean_substraction'],
-                                                dataAugmentation=False,
-                                                wo_da_patch_type=self.params['wo_da_patch_type'],
-                                                da_patch_type=self.params['da_patch_type'],
-                                                da_enhance_list=self.params['da_enhance_list'])
+                    if self.sep == 0:
+                        X_batch = self.dataset.getX(self.set_split,
+                                                    init_sample,
+                                                    final_sample,
+                                                    normalization=self.params['normalization'],
+                                                    normalization_type=self.params['normalization_type'],
+                                                    meanSubstraction=self.params['mean_substraction'],
+                                                    dataAugmentation=False,
+                                                    wo_da_patch_type=self.params['wo_da_patch_type'],
+                                                    da_patch_type=self.params['da_patch_type'],
+                                                    da_enhance_list=self.params['da_enhance_list'])
+                    else:
+                        indices = range(init_sample, final_sample, self.sep)
+                        X_batch = self.dataset.getX_FromIndices(self.set_split,
+                                                    indices,
+                                                    normalization=self.params['normalization'],
+                                                    normalization_type=self.params['normalization_type'],
+                                                    meanSubstraction=self.params['mean_substraction'],
+                                                    dataAugmentation=False,
+                                                    wo_da_patch_type=self.params['wo_da_patch_type'],
+                                                    da_patch_type=self.params['da_patch_type'],
+                                                    da_enhance_list=self.params['da_enhance_list'])
                     data = self.net.prepareData(X_batch, None)[0]
                 else:
-                    X_batch, Y_batch = self.dataset.getXY(self.set_split,
-                                                          batch_size,
-                                                          normalization=self.params['normalization'],
-                                                          normalization_type=self.params['normalization_type'],
-                                                          meanSubstraction=self.params['mean_substraction'],
-                                                          dataAugmentation=data_augmentation,
-                                                          wo_da_patch_type=self.params['wo_da_patch_type'],
-                                                          da_patch_type=self.params['da_patch_type'],
-                                                          da_enhance_list=self.params['da_enhance_list'])
+                    if self.sep == 0:
+                        X_batch, Y_batch = self.dataset.getXY(self.set_split,
+                                                              batch_size,
+                                                              normalization=self.params['normalization'],
+                                                              normalization_type=self.params['normalization_type'],
+                                                              meanSubstraction=self.params['mean_substraction'],
+                                                              dataAugmentation=data_augmentation,
+                                                              wo_da_patch_type=self.params['wo_da_patch_type'],
+                                                              da_patch_type=self.params['da_patch_type'],
+                                                              da_enhance_list=self.params['da_enhance_list'])
+                    else:
+                        indices = range(init_sample, final_sample, self.sep)
+                        X_batch, Y_batch = self.dataset.getXY_FromIndices(self.set_split,
+                                                                          indices,
+                                                                          normalization=self.params['normalization'],
+                                                                          normalization_type=self.params[
+                                                                              'normalization_type'],
+                                                                          meanSubstraction=self.params[
+                                                                              'mean_substraction'],
+                                                                          dataAugmentation=data_augmentation,
+                                                                          wo_da_patch_type=self.params[
+                                                                              'wo_da_patch_type'],
+                                                                          da_patch_type=self.params['da_patch_type'],
+                                                                          da_enhance_list=self.params[
+                                                                              'da_enhance_list'])
                     data = self.net.prepareData(X_batch, Y_batch)
             yield (data)
 
@@ -4091,7 +4134,6 @@ class Dataset(object):
         for id_out, type_out in list(zip(self.ids_outputs, self.types_outputs)):
             # y = [eval('self.Y_' + set_name + '[id_out][index]') for index in k]
             y = [getattr(self, 'Y_' + set_name)[id_out][index] for index in k]
-
             # if(set_name=='val'):
             #    logging.info(y)
 

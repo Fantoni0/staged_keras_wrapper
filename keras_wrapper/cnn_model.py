@@ -192,7 +192,6 @@ def loadModel(model_path, update_num, reload_epoch=True, custom_objects=None, fu
             model_wrapper = pk.load(open(model_name + '_CNN_Model.pkl', 'rb'))
         # except:
         #    raise Exception(ValueError)
-
     # Add logger for backwards compatibility (old pre-trained models) if it does not exist
     model_wrapper.updateLogger()
 
@@ -503,6 +502,7 @@ class Model_Wrapper(object):
         """
         self.default_training_params = {'n_epochs': 1,
                           'batch_size': 50,
+                          'sep': 0,
                           'maxlen': 100,  # sequence learning parameters (BeamSearch)
                           'homogeneous_batches': False,
                           'joint_batches': 4,
@@ -528,6 +528,7 @@ class Model_Wrapper(object):
                           'patience_check_split': 'val',
                           'eval_on_epochs': True,
                           'each_n_epochs': 1,
+                          'temporally_linked': False,
                           'start_eval_on_epoch': 0,  # early stopping parameters
                           'lr_decay': None,  # LR decay parameters
                           'initial_lr': 1.,
@@ -590,7 +591,11 @@ class Model_Wrapper(object):
                           'output_max_length_depending_on_x_factor': 3,
                           'output_min_length_depending_on_x': False,
                           'output_min_length_depending_on_x_factor': 2,
-                          'attend_on_output': False
+                          'attend_on_output': False,
+                          'temporally_linked': False,
+                          'link_index_id': 'link_index',
+                          'state_below_index': -1,
+                          'feedback_decoder': 0,
                           }
         self.default_predict_params = {'batch_size': 50,
                           'n_parallel_loaders': 1,
@@ -866,53 +871,7 @@ class Model_Wrapper(object):
         # Check input parameters and recover default values if needed
         if parameters is None:
             parameters = dict()
-        default_params = {'n_epochs': 1,
-                          'batch_size': 50,
-                          'maxlen': 100,  # sequence learning parameters (BeamSearch)
-                          'homogeneous_batches': False,
-                          'joint_batches': 4,
-                          'epochs_for_save': 1,
-                          'num_iterations_val': None,
-                          'n_parallel_loaders': 1,
-                          'normalize': True,
-                          'normalization_type': '(-1)-1',
-                          'mean_substraction': False,
-                          'data_augmentation': True,
-                          'verbose': 1, 'eval_on_sets': ['val'],
-                          'reload_epoch': 0,
-                          'extra_callbacks': [],
-                          'class_weights': None,
-                          'shuffle': True,
-                          'epoch_offset': 0,
-                          'patience': 0,
-                          'metric_check': None,
-                          'patience_check_split': 'val',
-                          'eval_on_epochs': True,
-                          'each_n_epochs': 1,
-                          'start_eval_on_epoch': 0,  # early stopping parameters
-                          'lr_decay': None,  # LR decay parameters
-                          'initial_lr': 1.,
-                          'reduce_each_epochs': True,
-                          'start_reduction_on_epoch': 0,
-                          'lr_gamma': 0.1,
-                          'lr_reducer_type': 'linear',
-                          'lr_reducer_exp_base': 0.5,
-                          'lr_half_life': 50000,
-                          'lr_warmup_exp': -1.5,
-                          'tensorboard': False,
-                          'temporally_linked': False,
-                          'tensorboard_params': {'log_dir': 'tensorboard_logs',
-                                                 'histogram_freq': 0,
-                                                 'batch_size': 50,
-                                                 'write_graph': True,
-                                                 'write_grads': False,
-                                                 'write_images': False,
-                                                 'embeddings_freq': 0,
-                                                 'embeddings_layer_names': None,
-                                                 'embeddings_metadata': None,
-                                                 }
-                          }
-        params = self.checkParameters(parameters, default_params)
+        params = checkParameters(parameters, self.default_training_params, hard_check=True)
         # Set params['start_reduction_on_epoch'] = params['lr_decay'] by default
         if params['lr_decay'] is not None and 'start_reduction_on_epoch' not in list(parameters):
             params['start_reduction_on_epoch'] = params['lr_decay']
@@ -949,54 +908,8 @@ class Model_Wrapper(object):
         # Check input parameters and recover default values if needed
         if parameters is None:
             parameters = dict()
-        default_params = {'n_epochs': 1,
-                          'batch_size': 50,
-                          'maxlen': 100,  # sequence learning parameters (BeamSearch)
-                          'homogeneous_batches': False,
-                          'joint_batches': 4,
-                          'epochs_for_save': 1,
-                          'num_iterations_val': None,
-                          'n_parallel_loaders': 1,
-                          'normalize': False,
-                          'normalization_type': None,
-                          'mean_substraction': False,
-                          'data_augmentation': True,
-                          'verbose': 1,
-                          'eval_on_sets': ['val'],
-                          'reload_epoch': 0,
-                          'extra_callbacks': [],
-                          'shuffle': True,
-                          'epoch_offset': 0,
-                          'patience': 0,
-                          'metric_check': None,
-                          'eval_on_epochs': True,
-                          'each_n_epochs': 1,
-                          'start_eval_on_epoch': 0,  # early stopping parameters
-                          'lr_decay': None,  # LR decay parameters
-                          'initial_lr': 1.,
-                          'reduce_each_epochs': True,
-                          'start_reduction_on_epoch': 0,
-                          'lr_gamma': 0.1,
-                          'lr_reducer_type': 'linear',
-                          'lr_reducer_exp_base': 0.5,
-                          'lr_half_life': 50000,
-                          'lr_warmup_exp': -1.5,
-                          'tensorboard': False,
-                          'tensorboard_params': {'log_dir': 'tensorboard_logs',
-                                                 'histogram_freq': 0,
-                                                 'batch_size': 50,
-                                                 'write_graph': True,
-                                                 'write_grads': False,
-                                                 'write_images': False,
-                                                 'embeddings_freq': 0,
-                                                 'embeddings_layer_names': None,
-                                                 'embeddings_metadata': None,
-                                                 'label_word_embeddings_with_vocab': False,
-                                                 'word_embeddings_labels': None
-                                                 }
 
-                          }
-        params = self.checkParameters(parameters, default_params)
+        params = checkParameters(parameters, self.default_training_params, hard_check=True)
         save_params = copy.copy(params)
         del save_params['extra_callbacks']
         self.training_parameters.append(save_params)
@@ -1117,6 +1030,8 @@ class Model_Wrapper(object):
                                                       temporally_linked=params['temporally_linked'],
                                                       n_parallel_loaders=params['n_parallel_loaders']).generator()
         else:
+            sep = params.get('sep', 0)
+            shuffling = sep <= 0
             train_gen = Data_Batch_Generator('train',
                                              self,
                                              ds,
@@ -1129,7 +1044,8 @@ class Model_Wrapper(object):
                                              da_patch_type=params['da_patch_type'],
                                              da_enhance_list=params['da_enhance_list'],
                                              mean_substraction=params['mean_substraction'],
-                                             shuffle=params['shuffle'],
+                                             shuffle=shuffling,
+                                             sep=sep,
                                              temporally_linked=params['temporally_linked']).generator()
 
         # Are we going to validate on 'val' data?
@@ -1761,35 +1677,7 @@ class Model_Wrapper(object):
         if parameters is None:
             parameters = dict()
         # Check input parameters and recover default values if needed
-        default_params = {'batch_size': 50,
-                          'n_parallel_loaders': 1,
-                          'beam_size': 5,
-                          'beam_batch_size': 50,
-                          'normalize': True,
-                          'normalization_type': None,
-                          'mean_substraction': False,
-                          'predict_on_sets': ['val'],
-                          'maxlen': 20,
-                          'n_samples': -1,
-                          'model_inputs': ['source_text', 'state_below'],
-                          'model_outputs': ['description'],
-                          'dataset_inputs': ['source_text', 'state_below'],
-                          'dataset_outputs': ['description'],
-                          'alpha_factor': 1.0,
-                          'sampling_type': 'max_likelihood',
-                          'words_so_far': False,
-                          'optimized_search': False,
-                          'search_pruning': False,
-                          'pos_unk': False,
-                          'temporally_linked': False,
-                          'link_index_id': 'link_index',
-                          'state_below_index': -1,
-                          'feedback_decoder': 0,
-                          'max_eval_samples': None,
-                          'attend_on_output': False
-                          }
-        params = self.checkParameters(parameters, default_params)
-
+        params = checkParameters(parameters, self.default_predict_with_beam_params)
         # Check if the model is ready for applying an optimized search
         if params['optimized_search']:
             if 'matchings_init_to_next' not in dir(self) or \
@@ -2049,45 +1937,7 @@ class Model_Wrapper(object):
         if parameters is None:
             parameters = dict()
         # Check input parameters and recover default values if needed
-        default_params = {'max_batch_size': 50,
-                          'n_parallel_loaders': 1,
-                          'beam_size': 5,
-                          'beam_batch_size': 50,
-                          'normalize': True,
-                          'normalization_type': None,
-                          'mean_substraction': False,
-                          'predict_on_sets': ['val'],
-                          'maxlen': 20,
-                          'n_samples': -1,
-                          'model_inputs': ['source_text', 'state_below'],
-                          'model_outputs': ['description'],
-                          'dataset_inputs': ['source_text', 'state_below'],
-                          'dataset_outputs': ['description'],
-                          'sampling_type': 'max_likelihood',
-                          'words_so_far': False,
-                          'optimized_search': False,
-                          'search_pruning': False,
-                          'pos_unk': False,
-                          'temporally_linked': False,
-                          'link_index_id': 'link_index',
-                          'state_below_index': -1,
-                          'feedback_decoder': 0,
-                          'state_below_maxlen': -1,
-                          'max_eval_samples': None,
-                          'normalize_probs': False,
-                          'alpha_factor': 0.0,
-                          'coverage_penalty': False,
-                          'length_penalty': False,
-                          'length_norm_factor': 0.0,
-                          'coverage_norm_factor': 0.0,
-                          'output_max_length_depending_on_x': False,
-                          'output_max_length_depending_on_x_factor': 3,
-                          'output_min_length_depending_on_x': False,
-                          'output_min_length_depending_on_x_factor': 2,
-                          'attend_on_output': False
-                          }
-
-        params = self.checkParameters(parameters, default_params)
+        params = checkParameters(parameters, self.default_predict_with_beam_params)
         # Check if the model is ready for applying an optimized search
         if params['optimized_search']:
             if 'matchings_init_to_next' not in dir(self) or \

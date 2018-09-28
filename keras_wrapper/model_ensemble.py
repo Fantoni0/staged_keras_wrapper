@@ -60,6 +60,7 @@ class BeamSearchEnsemble:
                     next_outs = next_outs[:-1]
                 prev_outs_list.append(next_outs)
             else:
+                print("PREDICT_COND II: ", ii)
                 probs_list.append(model.predict_cond(X, states_below, params, ii))
 
         probs = sum(probs_list[i] * self.model_weights[i] for i in range(len(models)))
@@ -143,6 +144,7 @@ class BeamSearchEnsemble:
                 np.asarray([np.zeros(params['state_below_maxlen']) + null_sym] * live_k)
         prev_outs = [None] * len(self.models)
         for ii in range(maxlen):
+            print("II - BEAM SEARCH: ", ii)
             # for every possible live sample calc prob for every possible label
             if self.optimized_search:  # use optimized search model if available
                 [probs, prev_outs, alphas] = self.predict_cond(self.models, X, state_below, params, ii,
