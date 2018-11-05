@@ -387,8 +387,8 @@ class Data_Batch_Generator(object):
                 init_sample = (it - 1) * batch_size
                 final_sample = it * batch_size
             else:
-                init_sample = ((it -1) % self.sep) + (batch_size * self.sep * ((it - 1)/self.sep))
-                final_sample = self.sep * (batch_size * ((it - 1) / self.sep +1))
+                init_sample = ((it - 1) % self.sep) + (batch_size * self.sep * ((it - 1) / self.sep))
+                final_sample = self.sep * (batch_size * ((it - 1) / self.sep + 1))
 
             # n_samples_split = eval("self.dataset.len_" + self.set_split)
             n_samples_split = getattr(self.dataset, "len_" + self.set_split)
@@ -397,7 +397,7 @@ class Data_Batch_Generator(object):
                 if self.sep == 0:
                     batch_size = final_sample - init_sample
                     it = 0
-                if init_sample > n_samples_split:  # When using self.sep
+                if init_sample >= n_samples_split:  # When using self.sep
                     it = 0
                     continue
 
